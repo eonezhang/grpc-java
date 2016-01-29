@@ -31,6 +31,9 @@
 
 package io.grpc;
 
+import com.google.common.base.MoreObjects;
+
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
 import javax.annotation.Nullable;
@@ -52,6 +55,29 @@ public final class CallOptions {
   // them outside of constructor. Otherwise the constructor will have a potentially long list of
   // unnamed arguments, which is undesirable.
   private Long deadlineNanoTime;
+  private Executor executor;
+
+  @Nullable
+  private String authority;
+
+  @Nullable
+  private RequestKey requestKey;
+
+  /**
+   * Override the HTTP/2 authority the channel claims to be connecting to. <em>This is not
+   * generally safe.</em> Overriding allows advanced users to re-use a single Channel for multiple
+   * services, even if those services are hosted on different domain names. That assumes the
+   * server is virtually hosting multiple domains and is guaranteed to continue doing so. It is
+   * rare for a service provider to make such a guarantee. <em>At this time, there is no security
+   * verification of the overridden value, such as making sure the authority matches the server's
+   * TLS certificate.</em>
+   */
+  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/67")
+  public CallOptions withAuthority(@Nullable String authority) {
+    CallOptions newOptions = new CallOptions(this);
+    newOptions.authority = authority;
+    return newOptions;
+  }
 
   /**
    * Returns a new {@code CallOptions} with the given absolute deadline in nanoseconds in the clock
@@ -86,6 +112,55 @@ public final class CallOptions {
     return deadlineNanoTime;
   }
 
+  /**
+   * Returns a new {@code CallOptions} with a request key for affinity-based routing.
+   */
+  @ExperimentalApi
+  public CallOptions withRequestKey(@Nullable RequestKey requestKey) {
+    CallOptions newOptions = new CallOptions(this);
+    newOptions.requestKey = requestKey;
+    return newOptions;
+  }
+
+  /**
+   * Returns the request key for affinity-based routing.
+   */
+  @ExperimentalApi
+  @Nullable
+  public RequestKey getRequestKey() {
+    return requestKey;
+  }
+
+  /**
+   * Override the HTTP/2 authority the channel claims to be connecting to. <em>This is not
+   * generally safe.</em> Overriding allows advanced users to re-use a single Channel for multiple
+   * services, even if those services are hosted on different domain names. That assumes the
+   * server is virtually hosting multiple domains and is guaranteed to continue doing so. It is
+   * rare for a service provider to make such a guarantee. <em>At this time, there is no security
+   * verification of the overridden value, such as making sure the authority matches the server's
+   * TLS certificate.</em>
+   */
+  @Nullable
+  @ExperimentalApi("https://github.com/grpc/grpc-java/issues/67")
+  public String getAuthority() {
+    return authority;
+  }
+
+  /**
+   * Returns a new {@code CallOptions} with {@code executor} to be used instead of the default
+   * executor specified with {@link ManagedChannelBuilder#executor}.
+   */
+  public CallOptions withExecutor(Executor executor) {
+    CallOptions newOptions = new CallOptions(this);
+    newOptions.executor = executor;
+    return newOptions;
+  }
+
+  @Nullable
+  public Executor getExecutor() {
+    return executor;
+  }
+
   private CallOptions() {
   }
 
@@ -94,16 +169,20 @@ public final class CallOptions {
    */
   private CallOptions(CallOptions other) {
     deadlineNanoTime = other.deadlineNanoTime;
+    authority = other.authority;
+    requestKey = other.requestKey;
   }
 
   @Override
   public String toString() {
-    StringBuilder buffer = new StringBuilder();
-    buffer.append("[deadlineNanoTime=").append(deadlineNanoTime);
+    MoreObjects.ToStringHelper toStringHelper = MoreObjects.toStringHelper(this);
+    toStringHelper.add("deadlineNanoTime", deadlineNanoTime);
     if (deadlineNanoTime != null) {
-      buffer.append(" (").append(deadlineNanoTime - System.nanoTime()).append(" ns from now)");
+      long remainingNanos = deadlineNanoTime - System.nanoTime();
+      toStringHelper.addValue(remainingNanos + " ns from now");
     }
-    buffer.append("]");
-    return buffer.toString();
+    toStringHelper.add("authority", authority);
+
+    return toStringHelper.toString();
   }
 }

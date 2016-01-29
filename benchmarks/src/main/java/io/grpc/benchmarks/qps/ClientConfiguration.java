@@ -39,10 +39,10 @@ import static io.grpc.testing.RpcType.UNARY;
 import static java.lang.Integer.parseInt;
 import static java.util.Arrays.asList;
 
+import io.grpc.netty.NettyChannelBuilder;
 import io.grpc.testing.PayloadType;
 import io.grpc.testing.RpcType;
 import io.grpc.testing.TestUtils;
-import io.grpc.transport.netty.NettyChannelBuilder;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -60,6 +60,7 @@ class ClientConfiguration implements Configuration {
   Transport transport = Transport.NETTY_NIO;
   boolean tls;
   boolean testca;
+  boolean useDefaultCiphers;
   boolean directExecutor;
   SocketAddress address;
   int channels = 4;
@@ -231,6 +232,13 @@ class ClientConfiguration implements Configuration {
       @Override
       protected void setClientValue(ClientConfiguration config, String value) {
         config.testca = parseBoolean(value);
+      }
+    },
+    USE_DEFAULT_CIPHERS("", "Use the default JDK ciphers for TLS (Used to support Java 7).",
+            "" + DEFAULT.useDefaultCiphers) {
+      @Override
+      protected void setClientValue(ClientConfiguration config, String value) {
+        config.useDefaultCiphers = parseBoolean(value);
       }
     },
     TRANSPORT("STR", Transport.getDescriptionString(), DEFAULT.transport.name().toLowerCase()) {

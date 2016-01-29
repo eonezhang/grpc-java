@@ -36,8 +36,11 @@ import com.google.common.base.Throwables;
 import com.google.common.util.concurrent.AbstractFuture;
 import com.google.common.util.concurrent.ListenableFuture;
 
+import io.grpc.CallOptions;
+import io.grpc.Channel;
 import io.grpc.ClientCall;
 import io.grpc.Metadata;
+import io.grpc.MethodDescriptor;
 import io.grpc.Status;
 
 import java.util.Iterator;
@@ -45,7 +48,11 @@ import java.util.NoSuchElementException;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import javax.annotation.Nullable;
 
@@ -55,6 +62,10 @@ import javax.annotation.Nullable;
  * that the runtime can vary behavior without requiring regeneration of the stub.
  */
 public class ClientCalls {
+  private static final Logger log = Logger.getLogger(ClientCalls.class.getName());
+
+  // Prevent instantiation
+  private ClientCalls() {}
 
   /**
    * Executes a unary call with a response {@link StreamObserver}.
@@ -87,10 +98,10 @@ public class ClientCalls {
   }
 
   /**
-   * Executes a duplex-streaming call.
+   * Executes a bidi-streaming call.
    * @return request stream observer.
    */
-  public static <ReqT, RespT> StreamObserver<ReqT> asyncDuplexStreamingCall(
+  public static <ReqT, RespT> StreamObserver<ReqT> asyncBidiStreamingCall(
       ClientCall<ReqT, RespT> call, StreamObserver<RespT> responseObserver) {
     return asyncStreamingRequestCall(call, responseObserver, true);
   }
@@ -109,6 +120,32 @@ public class ClientCalls {
   }
 
   /**
+   * Executes a unary call and blocks on the response.
+   *
+   * @return the single response message.
+   */
+  public static <ReqT, RespT> RespT blockingUnaryCall(
+      Channel channel, MethodDescriptor<ReqT, RespT> method, CallOptions callOptions, ReqT param) {
+    ThreadlessExecutor executor = new ThreadlessExecutor();
+    ClientCall<ReqT, RespT> call = channel.newCall(method, callOptions.withExecutor(executor));
+    try {
+      ListenableFuture<RespT> responseFuture = futureUnaryCall(call, param);
+      while (!responseFuture.isDone()) {
+        try {
+          executor.waitAndDrain();
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new RuntimeException(e);
+        }
+      }
+      return getUnchecked(responseFuture);
+    } catch (Throwable t) {
+      call.cancel();
+      throw Throwables.propagate(t);
+    }
+  }
+
+  /**
    * Executes a server-streaming call returning a blocking {@link Iterator} over the
    * response stream.
    * @return an iterator over the response stream.
@@ -117,6 +154,22 @@ public class ClientCalls {
   public static <ReqT, RespT> Iterator<RespT> blockingServerStreamingCall(
       ClientCall<ReqT, RespT> call, ReqT param) {
     BlockingResponseStream<RespT> result = new BlockingResponseStream<RespT>(call);
+    asyncUnaryRequestCall(call, param, result.listener(), true);
+    return result;
+  }
+
+  /**
+   * Executes a server-streaming call returning a blocking {@link Iterator} over the
+   * response stream.
+   *
+   * @return an iterator over the response stream.
+   */
+  // TODO(louiscryan): Not clear if we want to use this idiom for 'simple' stubs.
+  public static <ReqT, RespT> Iterator<RespT> blockingServerStreamingCall(
+      Channel channel, MethodDescriptor<ReqT, RespT> method, CallOptions callOptions, ReqT param) {
+    ThreadlessExecutor executor = new ThreadlessExecutor();
+    ClientCall<ReqT, RespT> call = channel.newCall(method, callOptions.withExecutor(executor));
+    BlockingResponseStream<RespT> result = new BlockingResponseStream<RespT>(call, executor);
     asyncUnaryRequestCall(call, param, result.listener(), true);
     return result;
   }
@@ -138,18 +191,19 @@ public class ClientCalls {
    * Returns the result of calling {@link Future#get()} interruptably on a task known not to throw a
    * checked exception.
    *
-   * <p>If interrupted, the interrupt is restored before throwing a {@code RuntimeException}.
+   * <p>If interrupted, the interrupt is restored before throwing an exception..
    *
-   * @throws RuntimeException if {@code get} is interrupted
-   * @throws CancellationException if {@code get} throws a {@code CancellationException}
-   * @throws StatusRuntimeException if {@code get} throws an {@code ExecutionException}
+   * @throws java.util.concurrent.CancellationException
+   *     if {@code get} throws a {@code CancellationException}.
+   * @throws io.grpc.StatusRuntimeException if {@code get} throws an {@link ExecutionException}
+   *     or an {@link InterruptedException}.
    */
   private static <V> V getUnchecked(Future<V> future) {
     try {
       return future.get();
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      throw new RuntimeException(e);
+      throw Status.CANCELLED.withCause(e).asRuntimeException();
     } catch (ExecutionException e) {
       throw Status.fromThrowable(e).asRuntimeException();
     }
@@ -188,7 +242,7 @@ public class ClientCalls {
 
   private static <ReqT, RespT> void startCall(ClientCall<ReqT, RespT> call,
       ClientCall.Listener<RespT> responseListener, boolean streamingResponse) {
-    call.start(responseListener, new Metadata.Headers());
+    call.start(responseListener, new Metadata());
     if (streamingResponse) {
       call.request(1);
     } else {
@@ -206,7 +260,7 @@ public class ClientCalls {
     }
 
     @Override
-    public void onValue(T value) {
+    public void onNext(T value) {
       call.sendMessage(value);
     }
 
@@ -237,7 +291,7 @@ public class ClientCalls {
     }
 
     @Override
-    public void onHeaders(Metadata.Headers headers) {
+    public void onHeaders(Metadata headers) {
     }
 
     @Override
@@ -248,7 +302,7 @@ public class ClientCalls {
             .asRuntimeException();
       }
       firstResponseReceived = true;
-      observer.onValue(message);
+      observer.onNext(message);
 
       if (streamingResponse) {
         // Request delivery of the next inbound message.
@@ -257,7 +311,7 @@ public class ClientCalls {
     }
 
     @Override
-    public void onClose(Status status, Metadata.Trailers trailers) {
+    public void onClose(Status status, Metadata trailers) {
       if (status.isOk()) {
         observer.onCompleted();
       } else {
@@ -278,7 +332,7 @@ public class ClientCalls {
     }
 
     @Override
-    public void onHeaders(Metadata.Headers headers) {
+    public void onHeaders(Metadata headers) {
     }
 
     @Override
@@ -291,7 +345,7 @@ public class ClientCalls {
     }
 
     @Override
-    public void onClose(Status status, Metadata.Trailers trailers) {
+    public void onClose(Status status, Metadata trailers) {
       if (status.isOk()) {
         if (value == null) {
           // No value received so mark the future as an error
@@ -342,26 +396,48 @@ public class ClientCalls {
     private final BlockingQueue<Object> buffer = new ArrayBlockingQueue<Object>(2);
     private final ClientCall.Listener<T> listener = new QueuingListener();
     private final ClientCall<?, T> call;
+    /** May be null. */
+    private final ThreadlessExecutor threadless;
     // Only accessed when iterating.
     private Object last;
 
     private BlockingResponseStream(ClientCall<?, T> call) {
+      this(call, null);
+    }
+
+    private BlockingResponseStream(ClientCall<?, T> call, ThreadlessExecutor threadless) {
       this.call = call;
+      this.threadless = threadless;
     }
 
     ClientCall.Listener<T> listener() {
       return listener;
     }
 
+    private Object waitForNext() throws InterruptedException {
+      if (threadless == null) {
+        return buffer.take();
+      } else {
+        Object next = buffer.poll();
+        while (next == null) {
+          threadless.waitAndDrain();
+          next = buffer.poll();
+        }
+        return next;
+      }
+    }
+
     @Override
     public boolean hasNext() {
-      try {
-        // Will block here indefinitely waiting for content. RPC timeouts defend against permanent
-        // hangs here as the call will become closed.
-        last = (last == null) ? buffer.take() : last;
-      } catch (InterruptedException ie) {
-        Thread.interrupted();
-        throw new RuntimeException(ie);
+      if (last == null) {
+        try {
+          // Will block here indefinitely waiting for content. RPC timeouts defend against permanent
+          // hangs here as the call will become closed.
+          last = waitForNext();
+        } catch (InterruptedException ie) {
+          Thread.interrupted();
+          throw new RuntimeException(ie);
+        }
       }
       if (last instanceof Status) {
         throw ((Status) last).asRuntimeException();
@@ -393,7 +469,7 @@ public class ClientCalls {
       private boolean done = false;
 
       @Override
-      public void onHeaders(Metadata.Headers headers) {
+      public void onHeaders(Metadata headers) {
       }
 
       @Override
@@ -403,7 +479,7 @@ public class ClientCalls {
       }
 
       @Override
-      public void onClose(Status status, Metadata.Trailers trailers) {
+      public void onClose(Status status, Metadata trailers) {
         Preconditions.checkState(!done, "ClientCall already closed");
         if (status.isOk()) {
           buffer.add(BlockingResponseStream.this);
@@ -412,6 +488,30 @@ public class ClientCalls {
         }
         done = true;
       }
+    }
+  }
+
+  private static class ThreadlessExecutor implements Executor {
+    private final BlockingQueue<Runnable> queue = new LinkedBlockingQueue<Runnable>();
+
+    /**
+     * Waits until there is a Runnable, then executes it and all queued Runnables after it.
+     */
+    public void waitAndDrain() throws InterruptedException {
+      Runnable runnable = queue.take();
+      while (runnable != null) {
+        try {
+          runnable.run();
+        } catch (Throwable t) {
+          log.log(Level.WARNING, "Runnable threw exception", t);
+        }
+        runnable = queue.poll();
+      }
+    }
+
+    @Override
+    public void execute(Runnable runnable) {
+      queue.add(runnable);
     }
   }
 }

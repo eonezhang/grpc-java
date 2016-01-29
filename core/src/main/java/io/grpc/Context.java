@@ -35,9 +35,10 @@ import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 
+import io.grpc.internal.SharedResourceHolder;
+
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
@@ -50,7 +51,6 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import javax.annotation.Nullable;
-
 
 /**
  * A context propagation mechanism which carries deadlines, cancellation signals,
@@ -87,7 +87,7 @@ import javax.annotation.Nullable;
  * <pre>
  *   CancellableContext withCancellation = Context.current().withCancellation();
  *   try {
-   *   executorService.execute(withCancellation.wrap(new Runnable() {
+ *     executorService.execute(withCancellation.wrap(new Runnable() {
  *       public void run() {
  *         while (waitingForData() &amp;&amp; !Context.current().isCancelled()) {}
  *       }
@@ -109,6 +109,7 @@ import javax.annotation.Nullable;
  * responsibility of the application to ensure that all contexts are properly cancelled.</li>
  * </ul>
  */
+@ExperimentalApi("https://github.com/grpc/grpc-java/issues/262")
 public class Context {
 
   private static final Logger LOG = Logger.getLogger(Context.class.getName());
@@ -140,17 +141,6 @@ public class Context {
         }
       };
 
-  /**
-   * Stack of context objects which is used to record attach & detach history on a thread.
-   */
-  private static final ThreadLocal<ArrayDeque<Context>> contextStack =
-      new ThreadLocal<ArrayDeque<Context>>() {
-    @Override
-    protected ArrayDeque<Context> initialValue() {
-      return new ArrayDeque<Context>();
-    }
-  };
-
   private static final Object[][] EMPTY_ENTRIES = new Object[0][2];
 
   /**
@@ -158,6 +148,16 @@ public class Context {
    * is not cancellable and so will not cascade cancellation or retain listeners.
    */
   public static final Context ROOT = new Context(null);
+
+  /**
+   * Currently bound context.
+   */
+  private static final ThreadLocal<Context> localContext = new ThreadLocal<Context>() {
+    @Override
+    protected Context initialValue() {
+      return ROOT;
+    }
+  };
 
   /**
    * Create a {@link Key} with the given name.
@@ -182,28 +182,19 @@ public class Context {
    * code stealing the ability to cancel arbitrarily.
    */
   public static Context current() {
-    ArrayDeque<Context> stack = contextStack.get();
-    if (stack.isEmpty()) {
+    Context current = localContext.get();
+    if (current == null) {
       return ROOT;
     }
-    return stack.peekLast();
+    return current;
   }
 
   private final Context parent;
   private final Object[][] keyValueEntries;
   private final boolean cascadesCancellation;
   private ArrayList<ExecutableListener> listeners;
-  private CancellationListener parentListener = new CancellationListener() {
-    @Override
-    public void cancelled(Context context) {
-      if (Context.this instanceof CancellableContext) {
-        // Record cancellation with its cause.
-        ((CancellableContext) Context.this).cancel(context.cause());
-      } else {
-        notifyAndClearListeners();
-      }
-    }
-  };
+  private CancellationListener parentListener = new ParentListener();
+  private final boolean canBeCancelled;
 
   /**
    * Construct a context that cannot be cancelled and will not cascade cancellation from its parent.
@@ -212,6 +203,7 @@ public class Context {
     this.parent = parent;
     keyValueEntries = EMPTY_ENTRIES;
     cascadesCancellation = false;
+    canBeCancelled = false;
   }
 
   /**
@@ -222,13 +214,25 @@ public class Context {
     this.parent = parent;
     this.keyValueEntries = keyValueEntries;
     cascadesCancellation = true;
+    canBeCancelled = this.parent != null && this.parent.canBeCancelled;
+  }
+
+  /**
+   * Construct a context that can be cancelled and will cascade cancellation from its parent if
+   * it is cancellable.
+   */
+  private Context(Context parent, Object[][] keyValueEntries, boolean isCancellable) {
+    this.parent = parent;
+    this.keyValueEntries = keyValueEntries;
+    cascadesCancellation = true;
+    canBeCancelled = isCancellable;
   }
 
   /**
    * Create a new context which is independently cancellable and also cascades cancellation from
    * its parent. Callers should ensure that either {@link CancellableContext#cancel(Throwable)}
-   * or {@link CancellableContext#detachAndCancel(Throwable)} are called to notify listeners and
-   * release the resources associated with them.
+   * or {@link CancellableContext#detachAndCancel(Context, Throwable)} are called to notify
+   * listeners and release the resources associated with them.
    *
    * <p>Sample usage:
    * <pre>
@@ -335,43 +339,41 @@ public class Context {
 
   boolean canBeCancelled() {
     // A context is cancellable if it cascades from its parent and its parent is
-    // cancellable.
-    return (cascadesCancellation && this.parent != null && this.parent.canBeCancelled());
+    // cancellable or is itself directly cancellable..
+    return canBeCancelled;
   }
 
   /**
    * Attach this context to the thread and make it {@link #current}, the previously current context
-   * will be restored when detach is called. It is allowed to attach contexts where
-   * {@link #isCancelled()} is {@code true}.
+   * is returned. It is allowed to attach contexts where {@link #isCancelled()} is {@code true}.
    */
-  public void attach() {
-    contextStack.get().addLast(this);
+  public Context attach() {
+    Context previous = current();
+    localContext.set(this);
+    return previous;
+  }
+
+  /**
+   * Detach the current context from the thread and attach the provided replacement. If this
+   * context is not {@link #current()} a SEVERE message will be logged but the context to attach
+   * will still be bound.
+   */
+  public void detach(Context toAttach) {
+    Preconditions.checkNotNull(toAttach);
+    Context previous = current();
+    if (previous != this) {
+      // Log a severe message instead of throwing an exception as the context to attach is assumed
+      // to be the correct one and the unbalanced state represents a coding mistake in a lower
+      // layer in the stack that cannot be recovered from here.
+      LOG.log(Level.SEVERE, "Context was not attached when detaching",
+          new Throwable().fillInStackTrace());
+    }
+    localContext.set(toAttach);
   }
 
   // Visible for testing
   boolean isCurrent() {
     return current() == this;
-  }
-
-  /**
-   * Detach the current context from the thread and restore the context that was previously
-   * attached to the thread as the 'current' context.
-   *
-   * @throws java.lang.IllegalStateException if this context is not {@link #current()}.
-   */
-  public void detach() {
-    ArrayDeque<Context> stack = contextStack.get();
-    if (stack.isEmpty()) {
-      if (this == ROOT) {
-        throw new IllegalStateException("Cannot detach root");
-      } else {
-        throw new IllegalStateException("Cannot detach non-root context when root is current");
-      }
-    }
-    if (stack.peekLast() != this) {
-      throw new IllegalStateException("Cannot detach a context that is not current");
-    }
-    stack.removeLast();
   }
 
   /**
@@ -409,7 +411,7 @@ public class Context {
                           final Executor executor) {
     Preconditions.checkNotNull(cancellationListener);
     Preconditions.checkNotNull(executor);
-    if (canBeCancelled()) {
+    if (canBeCancelled) {
       ExecutableListener executableListener =
           new ExecutableListener(executor, cancellationListener);
       synchronized (this) {
@@ -427,8 +429,6 @@ public class Context {
           }
         }
       }
-    } else {
-      // Discussion point: Should we throw or suppress.
     }
   }
 
@@ -436,13 +436,16 @@ public class Context {
    * Remove a {@link CancellationListener}.
    */
   public void removeListener(CancellationListener cancellationListener) {
+    if (!canBeCancelled) {
+      return;
+    }
     synchronized (this) {
       if (listeners != null) {
         for (int i = listeners.size() - 1; i >= 0; i--) {
           if (listeners.get(i).listener == cancellationListener) {
             listeners.remove(i);
-            // Just remove the first matching listener, given that we allow duplicate adds we should
-            // allow for duplicates after remove.
+            // Just remove the first matching listener, given that we allow duplicate
+            // adds we should allow for duplicates after remove.
             break;
           }
         }
@@ -460,6 +463,9 @@ public class Context {
    * any reference to them so that they may be garbage collected.
    */
   void notifyAndClearListeners() {
+    if (!canBeCancelled) {
+      return;
+    }
     ArrayList<ExecutableListener> tmpListeners;
     synchronized (this) {
       if (listeners == null) {
@@ -468,11 +474,18 @@ public class Context {
       tmpListeners = listeners;
       listeners = null;
     }
+    // Deliver events to non-child context listeners before we notify child contexts. We do this
+    // to cancel higher level units of work before child units. This allows for a better error
+    // handling paradigm where the higher level unit of work knows it is cancelled and so can
+    // ignore errors that bubble up as a result of cancellation of lower level units.
     for (int i = 0; i < tmpListeners.size(); i++) {
-      try {
+      if (!(tmpListeners.get(i).listener instanceof ParentListener)) {
         tmpListeners.get(i).deliver();
-      } catch (Throwable t) {
-        LOG.log(Level.INFO, "Exception notifying context listener", t);
+      }
+    }
+    for (int i = 0; i < tmpListeners.size(); i++) {
+      if (tmpListeners.get(i).listener instanceof ParentListener) {
+        tmpListeners.get(i).deliver();
       }
     }
     parent.removeListener(parentListener);
@@ -494,11 +507,11 @@ public class Context {
     return new Runnable() {
       @Override
       public void run() {
-        attach();
+        Context previous = attach();
         try {
           r.run();
         } finally {
-          detach();
+          detach(previous);
         }
       }
     };
@@ -511,14 +524,50 @@ public class Context {
     return new Callable<C>() {
       @Override
       public C call() throws Exception {
-        attach();
+        Context previous = attach();
         try {
           return c.call();
         } finally {
-          detach();
+          detach(previous);
         }
       }
     };
+  }
+
+  /**
+   * Wrap an {@link Executor} so that it executes with this context as the {@link #current} context.
+   * It is generally expected that {@link #propagate(Executor)} would be used more commonly than
+   * this method.
+   *
+   * @see #propagate(Executor)
+   */
+  public Executor wrap(final Executor e) {
+    class WrappingExecutor implements Executor {
+      @Override
+      public void execute(Runnable r) {
+        e.execute(wrap(r));
+      }
+    }
+
+    return new WrappingExecutor();
+  }
+
+  /**
+   * Create an executor that propagates the {@link #current} context when {@link Executor#execute}
+   * is called to the {@link #current} context of the {@code Runnable} scheduled. <em>Note that this
+   * is a static method.</em>
+   *
+   * @see #wrap(Executor)
+   */
+  public static Executor propagate(final Executor e) {
+    class PropagatingExecutor implements Executor {
+      @Override
+      public void execute(Runnable r) {
+        e.execute(Context.current().wrap(r));
+      }
+    }
+
+    return new PropagatingExecutor();
   }
 
   /**
@@ -551,8 +600,8 @@ public class Context {
      * Create a cancellable context that does not have a deadline.
      */
     private CancellableContext(Context parent) {
-      super(parent, EMPTY_ENTRIES);
-      // Create a dummy that inherits from this to attach and detach so that you cannot retrieve a
+      super(parent, EMPTY_ENTRIES, true);
+      // Create a dummy that inherits from this to attach so that you cannot retrieve a
       // cancellable context from Context.current()
       dummy = new Context(this, EMPTY_ENTRIES);
     }
@@ -563,7 +612,7 @@ public class Context {
     private CancellableContext(Context parent, long delayNanos) {
       this(parent);
       final ScheduledExecutorService scheduler = SharedResourceHolder.get(SCHEDULER);
-      scheduler.schedule(new Runnable() {
+      scheduledFuture = scheduler.schedule(new Runnable() {
         @Override
         public void run() {
           try {
@@ -577,13 +626,13 @@ public class Context {
 
 
     @Override
-    public void attach() {
-      dummy.attach();
+    public Context attach() {
+      return dummy.attach();
     }
 
     @Override
-    public void detach() {
-      dummy.detach();
+    public void detach(Context toAttach) {
+      dummy.detach(toAttach);
     }
 
     @Override
@@ -593,17 +642,17 @@ public class Context {
 
     /**
      * Attach this context to the thread and return a {@link AutoCloseable} that can be
-     * used with try-with-resource statements to properly {@link #detach} and {@link #cancel}
-     * the context on completion.
+     * used with try-with-resource statements to properly attach the previously bound context
+     * when {@link AutoCloseable#close()} is called.
      *
      * @return a {@link java.io.Closeable} which can be used with try-with-resource blocks.
      */
     public Closeable attachAsCloseable() {
-      attach();
+      final Context previous = attach();
       return new Closeable() {
         @Override
         public void close() throws IOException {
-          detachAndCancel(null);
+          detachAndCancel(previous, null);
         }
       };
     }
@@ -636,22 +685,17 @@ public class Context {
     }
 
     /**
-     * Cancel this context and detach it from the current context from the thread and restore the
-     * context that was previously attached to the thread as the 'current' context.
+     * Cancel this context and detach it as the current context from the thread.
      *
-     * @throws java.lang.IllegalStateException if this context is not {@link #current()}.
+     * @param toAttach context to make current.
+     * @param cause of cancellation, can be {@code null}.
      */
-    public void detachAndCancel(@Nullable Throwable cause) {
+    public void detachAndCancel(Context toAttach, @Nullable Throwable cause) {
       try {
-        detach();
+        detach(toAttach);
       } finally {
         cancel(cause);
       }
-    }
-
-    @Override
-    protected boolean canBeCancelled() {
-      return true;
     }
 
     @Override
@@ -742,6 +786,11 @@ public class Context {
     public int hashCode() {
       return name.hashCode();
     }
+
+    @Override
+    public String toString() {
+      return name;
+    }
   }
 
   /**
@@ -757,12 +806,28 @@ public class Context {
     }
 
     private void deliver() {
-      executor.execute(this);
+      try {
+        executor.execute(this);
+      } catch (Throwable t) {
+        LOG.log(Level.INFO, "Exception notifying context listener", t);
+      }
     }
 
     @Override
     public void run() {
       listener.cancelled(Context.this);
+    }
+  }
+
+  private class ParentListener implements CancellationListener {
+    @Override
+    public void cancelled(Context context) {
+      if (Context.this instanceof CancellableContext) {
+        // Record cancellation with its cause.
+        ((CancellableContext) Context.this).cancel(context.cause());
+      } else {
+        notifyAndClearListeners();
+      }
     }
   }
 }

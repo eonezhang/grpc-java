@@ -44,6 +44,7 @@ import static io.grpc.benchmarks.qps.ClientConfiguration.ClientParam.STREAMING_R
 import static io.grpc.benchmarks.qps.ClientConfiguration.ClientParam.TESTCA;
 import static io.grpc.benchmarks.qps.ClientConfiguration.ClientParam.TLS;
 import static io.grpc.benchmarks.qps.ClientConfiguration.ClientParam.TRANSPORT;
+import static io.grpc.benchmarks.qps.ClientConfiguration.ClientParam.USE_DEFAULT_CIPHERS;
 import static io.grpc.benchmarks.qps.ClientConfiguration.ClientParam.WARMUP_DURATION;
 import static io.grpc.benchmarks.qps.Utils.HISTOGRAM_MAX_VALUE;
 import static io.grpc.benchmarks.qps.Utils.HISTOGRAM_PRECISION;
@@ -54,7 +55,7 @@ import com.google.common.base.Preconditions;
 import com.google.protobuf.ByteString;
 
 import io.grpc.Channel;
-import io.grpc.ChannelImpl;
+import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import io.grpc.testing.Payload;
@@ -95,7 +96,7 @@ public class AsyncClient {
 
     SimpleRequest req = newRequest();
 
-    List<Channel> channels = new ArrayList<Channel>(config.channels);
+    List<ManagedChannel> channels = new ArrayList<ManagedChannel>(config.channels);
     for (int i = 0; i < config.channels; i++) {
       channels.add(newClientChannel(config));
     }
@@ -129,7 +130,7 @@ public class AsyncClient {
             .build();
   }
 
-  private void warmup(SimpleRequest req, List<Channel> channels) throws Exception {
+  private void warmup(SimpleRequest req, List<? extends Channel> channels) throws Exception {
     long endTime = System.nanoTime() + TimeUnit.SECONDS.toNanos(config.warmupDuration);
     doBenchmark(req, channels, endTime);
     // I don't know if this helps, but it doesn't hurt trying. We sometimes run warmups
@@ -139,7 +140,8 @@ public class AsyncClient {
   }
 
   private List<Histogram> doBenchmark(SimpleRequest req,
-                                      List<Channel> channels, long endTime) throws Exception {
+                                      List<? extends Channel> channels,
+                                      long endTime) throws Exception {
     // Initiate the concurrent calls
     List<Future<Histogram>> futures =
         new ArrayList<Future<Histogram>>(config.outstandingRpcsPerChannel);
@@ -178,7 +180,7 @@ public class AsyncClient {
       long lastCall = System.nanoTime();
 
       @Override
-      public void onValue(SimpleResponse value) {
+      public void onNext(SimpleResponse value) {
       }
 
       @Override
@@ -219,7 +221,7 @@ public class AsyncClient {
 
     StreamObserver<SimpleRequest> requestObserver = stub.streamingCall(responseObserver);
     responseObserver.requestObserver = requestObserver;
-    requestObserver.onValue(request);
+    requestObserver.onNext(request);
     return future;
   }
 
@@ -248,14 +250,14 @@ public class AsyncClient {
     }
 
     @Override
-    public void onValue(SimpleResponse value) {
+    public void onNext(SimpleResponse value) {
       long now = System.nanoTime();
       // Record the latencies in microseconds
       histogram.recordValue((now - lastCall) / 1000);
       lastCall = now;
 
       if (endTime > now) {
-        requestObserver.onValue(request);
+        requestObserver.onNext(request);
       } else {
         requestObserver.onCompleted();
       }
@@ -313,9 +315,9 @@ public class AsyncClient {
     System.out.println(values);
   }
 
-  private static void shutdown(List<Channel> channels) {
-    for (Channel channel : channels) {
-      ((ChannelImpl) channel).shutdown();
+  private static void shutdown(List<ManagedChannel> channels) {
+    for (ManagedChannel channel : channels) {
+      channel.shutdown();
     }
   }
 
@@ -325,7 +327,7 @@ public class AsyncClient {
   public static void main(String... args) throws Exception {
     ClientConfiguration.Builder configBuilder = ClientConfiguration.newBuilder(
         ADDRESS, CHANNELS, OUTSTANDING_RPCS, CLIENT_PAYLOAD, SERVER_PAYLOAD,
-        TLS, TESTCA, TRANSPORT, DURATION, WARMUP_DURATION, DIRECTEXECUTOR,
+        TLS, TESTCA, USE_DEFAULT_CIPHERS, TRANSPORT, DURATION, WARMUP_DURATION, DIRECTEXECUTOR,
         SAVE_HISTOGRAM, STREAMING_RPCS, FLOW_CONTROL_WINDOW);
     ClientConfiguration config;
     try {

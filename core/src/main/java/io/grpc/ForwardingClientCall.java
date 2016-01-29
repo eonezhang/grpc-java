@@ -41,7 +41,7 @@ public abstract class ForwardingClientCall<ReqT, RespT> extends ClientCall<ReqT,
   protected abstract ClientCall<ReqT, RespT> delegate();
 
   @Override
-  public void start(Listener<RespT> responseListener, Metadata.Headers headers) {
+  public void start(Listener<RespT> responseListener, Metadata headers) {
     delegate().start(responseListener, headers);
   }
 
@@ -63,6 +63,11 @@ public abstract class ForwardingClientCall<ReqT, RespT> extends ClientCall<ReqT,
   @Override
   public void sendMessage(ReqT message) {
     delegate().sendMessage(message);
+  }
+
+  @Override
+  public void setMessageCompression(boolean enabled) {
+    delegate().setMessageCompression(enabled);
   }
 
   @Override

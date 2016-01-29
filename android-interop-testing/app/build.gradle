@@ -14,8 +14,7 @@ android {
     }
     buildTypes {
         debug {
-            minifyEnabled true
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            minifyEnabled false
         }
         release {
             minifyEnabled true
@@ -29,11 +28,11 @@ android {
 
 protobuf {
     protoc {
-        artifact = 'com.google.protobuf:protoc:3.0.0-alpha-2'
+        artifact = 'com.google.protobuf:protoc:3.0.0-beta-2'
     }
     plugins {
         grpc {
-            artifact = 'io.grpc:protoc-gen-grpc-java:0.8.0-SNAPSHOT'
+            artifact = 'io.grpc:protoc-gen-grpc-java:0.10.0-SNAPSHOT'
         }
     }
     generateProtoTasks {
@@ -64,9 +63,9 @@ dependencies {
     compile 'com.squareup.okhttp:okhttp:2.2.0'
     testCompile 'junit:junit:4.12'
     // You need to build grpc-java to obtain these libraries below.
-    compile 'io.grpc:grpc-core:0.8.0-SNAPSHOT'
-    compile 'io.grpc:grpc-protobuf-nano:0.8.0-SNAPSHOT'
-    compile 'io.grpc:grpc-okhttp:0.8.0-SNAPSHOT'
-    compile 'io.grpc:grpc-stub:0.8.0-SNAPSHOT'
+    compile 'io.grpc:grpc-protobuf-nano:0.10.0-SNAPSHOT'
+    compile 'io.grpc:grpc-okhttp:0.10.0-SNAPSHOT'
+    compile 'io.grpc:grpc-stub:0.10.0-SNAPSHOT'
+    compile 'io.grpc:grpc-testing:0.10.0-SNAPSHOT'
     compile 'javax.annotation:javax.annotation-api:1.2'
 }

@@ -32,13 +32,19 @@
 package io.grpc;
 
 import static com.google.common.base.Charsets.US_ASCII;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Iterables;
 
+import io.grpc.internal.GrpcUtil;
+
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -55,18 +61,21 @@ import javax.annotation.concurrent.NotThreadSafe;
  * </p>
  */
 @NotThreadSafe
-public abstract class Metadata {
+public final class Metadata {
 
   /**
    * All binary headers should have this suffix in their names. Vice versa.
+   *
+   * <p>Its value is {@code "-bin"}. An ASCII header's name must not end with this.
    */
   public static final String BINARY_HEADER_SUFFIX = "-bin";
 
   /**
    * Simple metadata marshaller that encodes strings as is.
    *
-   * <p>This should be used with ASCII strings that only contain printable characters and space.
-   * Otherwise the output may be considered invalid and discarded by the transport.
+   * <p>This should be used with ASCII strings that only contain the characters listed in the class
+   * comment of {@link AsciiMarshaller}. Otherwise the output may be considered invalid and
+   * discarded by the transport, or the call may fail.
    */
   public static final AsciiMarshaller<String> ASCII_STRING_MARSHALLER =
       new AsciiMarshaller<String>() {
@@ -85,7 +94,7 @@ public abstract class Metadata {
   /**
    * Simple metadata marshaller that encodes an integer as a signed decimal string.
    */
-  public static final AsciiMarshaller<Integer> INTEGER_MARSHALLER = new AsciiMarshaller<Integer>() {
+  static final AsciiMarshaller<Integer> INTEGER_MARSHALLER = new AsciiMarshaller<Integer>() {
 
     @Override
     public String toAsciiString(Integer value) {
@@ -107,7 +116,8 @@ public abstract class Metadata {
    * Constructor called by the transport layer when it receives binary metadata.
    */
   // TODO(louiscryan): Convert to use ByteString so we can cache transformations
-  private Metadata(byte[]... binaryValues) {
+  @Internal
+  public Metadata(byte[]... binaryValues) {
     for (int i = 0; i < binaryValues.length; i++) {
       String name = new String(binaryValues[i], US_ASCII);
       storeAdd(name, new MetadataEntry(name.endsWith(BINARY_HEADER_SUFFIX), binaryValues[++i]));
@@ -117,7 +127,7 @@ public abstract class Metadata {
   /**
    * Constructor called by the application layer when it wants to send metadata.
    */
-  private Metadata() {}
+  public Metadata() {}
 
   private void storeAdd(String name, MetadataEntry value) {
     List<MetadataEntry> values = store.get(name);
@@ -132,7 +142,7 @@ public abstract class Metadata {
    * Returns true if a value is defined for the given key.
    */
   public boolean containsKey(Key<?> key) {
-    return store.containsKey(key.name);
+    return store.containsKey(key.name());
   }
 
   /**
@@ -154,6 +164,7 @@ public abstract class Metadata {
    * may not be accurate if Metadata is mutated.
    */
   public <T> Iterable<T> getAll(final Key<T> key) {
+
     if (containsKey(key)) {
       return Iterables.transform(
           store.get(key.name()),
@@ -176,7 +187,7 @@ public abstract class Metadata {
   public <T> void put(Key<T> key, T value) {
     Preconditions.checkNotNull(key, "key");
     Preconditions.checkNotNull(value, "value");
-    storeAdd(key.name(), new MetadataEntry(key, value));
+    storeAdd(key.name, new MetadataEntry(key, value));
   }
 
   /**
@@ -227,17 +238,24 @@ public abstract class Metadata {
    * <p>It produces serialized names and values interleaved. result[i*2] are names, while
    * result[i*2+1] are values.
    *
-   * <p>Names are ASCII string bytes. If the name ends with "-bin", the value can be raw binary.
-   * Otherwise, the value must be printable ASCII characters or space.
+   * <p>Names are ASCII string bytes that contains only the characters listed in the class comment
+   * of {@link Key}. If the name ends with {@code "-bin"}, the value can be raw binary.  Otherwise,
+   * the value must contain only characters listed in the class comments of {@link AsciiMarshaller}
    *
    * <p>The returned byte arrays <em>must not</em> be modified.
    *
    * <p>This method is intended for transport use only.
    */
+  @Internal
   public byte[][] serialize() {
     // One *2 for keys+values, one *2 to prevent resizing if a single key has multiple values
     List<byte[]> serialized = new ArrayList<byte[]>(store.size() * 2 * 2);
     for (Map.Entry<String, List<MetadataEntry>> keyEntry : store.entrySet()) {
+      // Intentionally skip this field on serialization.  It must be handled special by the
+      // transport.
+      if (keyEntry.getKey().equals(GrpcUtil.AUTHORITY_KEY.name())) {
+        continue;
+      }
       for (int i = 0; i < keyEntry.getValue().size(); i++) {
         MetadataEntry entry = keyEntry.getValue().get(i);
         byte[] asciiName;
@@ -273,131 +291,26 @@ public abstract class Metadata {
   public void merge(Metadata other, Set<Key<?>> keys) {
     Preconditions.checkNotNull(other);
     for (Key<?> key : keys) {
-      List<MetadataEntry> values = other.store.get(key.name);
+      List<MetadataEntry> values = other.store.get(key.name());
       if (values == null) {
         continue;
       }
       for (int i = 0; i < values.size(); i++) {
         // Must copy the MetadataEntries since they are mutated. If the two Metadata objects are
         // used from different threads it would cause thread-safety issues.
-        storeAdd(key.name, new MetadataEntry(values.get(i)));
+        storeAdd(key.name(), new MetadataEntry(values.get(i)));
       }
     }
+  }
+
+  @Override
+  public String toString() {
+    return "Metadata(" + toStringInternal() + ")";
   }
 
   private String toStringInternal() {
     return store.toString();
   }
-
-  /**
-   * Concrete instance for metadata attached to the start of a call.
-   */
-  public static class Headers extends Metadata {
-    private String path;
-    private String authority;
-
-    /**
-     * Called by the transport layer to create headers from their binary serialized values.
-     *
-     * <p>This method does not copy the provided byte arrays. The byte arrays must not be mutated.
-     */
-    public Headers(byte[]... headers) {
-      super(headers);
-    }
-
-    /**
-     * Called by the application layer to construct headers prior to passing them to the
-     * transport for serialization.
-     */
-    public Headers() {
-    }
-
-    /**
-     * The path for the operation.
-     */
-    public String getPath() {
-      return path;
-    }
-
-    public void setPath(String path) {
-      this.path = path;
-    }
-
-    /**
-     * The serving authority for the operation.
-     */
-    public String getAuthority() {
-      return authority;
-    }
-
-    /**
-     * Override the HTTP/2 authority the channel claims to be connecting to. <em>This is not
-     * generally safe.</em> Overriding allows advanced users to re-use a single Channel for multiple
-     * services, even if those services are hosted on different domain names. That assumes the
-     * server is virtually hosting multiple domains and is guaranteed to continue doing so. It is
-     * rare for a service provider to make such a guarantee. <em>At this time, there is no security
-     * verification of the overridden value, such as making sure the authority matches the server's
-     * TLS certificate.</em>
-     */
-    public void setAuthority(String authority) {
-      this.authority = authority;
-    }
-
-    @Override
-    public void merge(Metadata other) {
-      super.merge(other);
-      mergePathAndAuthority(other);
-    }
-
-    @Override
-    public void merge(Metadata other, Set<Key<?>> keys) {
-      super.merge(other, keys);
-      mergePathAndAuthority(other);
-    }
-
-    private void mergePathAndAuthority(Metadata other) {
-      if (other instanceof Headers) {
-        Headers otherHeaders = (Headers) other;
-        path = otherHeaders.path != null ? otherHeaders.path : path;
-        authority = otherHeaders.authority != null ? otherHeaders.authority : authority;
-      }
-    }
-
-    @Override
-    public String toString() {
-      return "Headers(path=" + path
-          + ",authority=" + authority
-          + ",metadata=" + super.toStringInternal() + ")";
-    }
-  }
-
-  /**
-   * Concrete instance for metadata attached to the end of the call. Only provided by
-   * servers.
-   */
-  public static class Trailers extends Metadata {
-    /**
-     * Called by the transport layer to create trailers from their binary serialized values.
-     *
-     * <p>This method does not copy the provided byte arrays. The byte arrays must not be mutated.
-     */
-    public Trailers(byte[]... headers) {
-      super(headers);
-    }
-
-    /**
-     * Called by the application layer to construct trailers prior to passing them to the
-     * transport for serialization.
-     */
-    public Trailers() {
-    }
-
-    @Override
-    public String toString() {
-      return "Trailers(" + super.toStringInternal() + ")";
-    }
-  }
-
 
   /**
    * Marshaller for metadata values that are serialized into raw binary.
@@ -420,12 +333,20 @@ public abstract class Metadata {
 
   /**
    * Marshaller for metadata values that are serialized into ASCII strings that contain only
-   * printable characters and space.
+   * following characters:
+   * <ul>
+   *   <li>Space: {@code 0x20}, but must not be at the beginning or at the end of the value.</li>
+   *   <li>ASCII visible characters ({@code 0x21-0x7E}).
+   * </ul>
+   *
+   * <p>Note this has to be the subset of valid characters in {@code field-content} from RFC 7230
+   * Section 3.2.
    */
   public interface AsciiMarshaller<T> {
     /**
-     * Serialize a metadata value to a ASCII string that contains only printable characters and
-     * space.
+     * Serialize a metadata value to a ASCII string that contains only the characters listed in the
+     * class comment of {@link AsciiMarshaller}. Otherwise the output may be considered invalid and
+     * discarded by the transport, or the call may fail.
      *
      * @param value to serialize
      * @return serialized version of value, or null if value cannot be transmitted.
@@ -442,36 +363,110 @@ public abstract class Metadata {
 
   /**
    * Key for metadata entries. Allows for parsing and serialization of metadata.
+   *
+   * <h3>Valid characters in key names</h3>
+   *
+   * <p>Only the following ASCII characters are allowed in the names of keys:
+   * <ul>
+   *   <li>digits: {@code 0-9}</li>
+   *   <li>uppercase letters: {@code A-Z} (normalized to lower)</li>
+   *   <li>lowercase letters: {@code a-z}</li>
+   *   <li>special characters: {@code -_}</li>
+   * </ul>
+   *
+   * <p>This is a a strict subset of the HTTP field-name rules.  Applications may not send or
+   * receive metadata with invalid key names.  However, the gRPC library may preserve any metadata
+   * received even if it does not conform to the above limitations.  Additionally, if metadata
+   * contains non conforming field names, they will still be sent.  In this way, unknown metadata
+   * fields are parsed, serialized and preserved, but never interpreted.  They are similar to
+   * protobuf unknown fields.
+   *
+   * <p>Note this has to be the subset of valid HTTP/2 token characters as defined in RFC7230
+   * Section 3.2.6 and RFC5234 Section B.1</p>
+   *
+   * @see <a href="https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md">Wire Spec</a>
+   * @see <a href="https://tools.ietf.org/html/rfc7230#section-3.2.6">RFC7230</a>
+   * @see <a href="https://tools.ietf.org/html/rfc5234#appendix-B.1">RFC5234</a>
    */
   public abstract static class Key<T> {
+
+    /** Valid characters for field names as defined in RFC7230 and RFC5234. */
+    private static final BitSet VALID_T_CHARS = generateValidTChars();
 
     /**
      * Creates a key for a binary header.
      *
-     * @param name must end with {@link #BINARY_HEADER_SUFFIX}
+     * @param name Must contain only the valid key characters as defined in the class comment. Must
+     *             end with {@link #BINARY_HEADER_SUFFIX}.
      */
     public static <T> Key<T> of(String name, BinaryMarshaller<T> marshaller) {
       return new BinaryKey<T>(name, marshaller);
     }
 
     /**
-     * Creates a key for a ASCII header.
+     * Creates a key for an ASCII header.
      *
-     * @param name must not end with {@link #BINARY_HEADER_SUFFIX}
+     * @param name Must contain only the valid key characters as defined in the class comment. Must
+     *             <b>not</b> end with {@link #BINARY_HEADER_SUFFIX}
      */
     public static <T> Key<T> of(String name, AsciiMarshaller<T> marshaller) {
       return new AsciiKey<T>(name, marshaller);
     }
 
-    private final String name;
-    private final byte[] asciiName;
+    private final String originalName;
 
-    private Key(String name) {
-      this.name = Preconditions.checkNotNull(name, "name").toLowerCase(Locale.ROOT).intern();
-      this.asciiName = this.name.getBytes(US_ASCII);
+    private final String name;
+    private final byte[] nameBytes;
+
+    private static BitSet generateValidTChars() {
+      BitSet valid  = new BitSet(0x7f);
+      valid.set('-');
+      valid.set('_');
+      valid.set('.');
+      for (char c = '0'; c <= '9'; c++) {
+        valid.set(c);
+      }
+      // Only validates after normalization, so we exclude uppercase.
+      for (char c = 'a'; c <= 'z'; c++) {
+        valid.set(c);
+      }
+      return valid;
     }
 
-    public String name() {
+    private static String validateName(String n) {
+      checkNotNull(n);
+      checkArgument(n.length() != 0, "token must have at least 1 tchar");
+      for (int i = 0; i < n.length(); i++) {
+        char tChar = n.charAt(i);
+        // TODO(notcarl): remove this hack once pseudo headers are properly handled
+        if (tChar == ':' && i == 0) {
+          continue;
+        }
+
+        checkArgument(VALID_T_CHARS.get(tChar),
+            "Invalid character '%s' in key name '%s'", tChar, n);
+      }
+      return n;
+    }
+
+    private Key(String name) {
+      this.originalName = checkNotNull(name);
+      // Intern the result for faster string identity checking.
+      this.name = validateName(this.originalName.toLowerCase(Locale.ROOT)).intern();
+      this.nameBytes = this.name.getBytes(US_ASCII);
+    }
+
+    /**
+     * @return The original name used to create this key.
+     */
+    public final String originalName() {
+      return originalName;
+    }
+
+    /**
+     * @return The normalized name for this key.
+     */
+    public final String name() {
       return name;
     }
 
@@ -483,8 +478,9 @@ public abstract class Metadata {
      * <p>This method is intended for transport use only.
      */
     // TODO (louiscryan): Migrate to ByteString
-    public byte[] asciiName() {
-      return asciiName;
+    @VisibleForTesting
+    byte[] asciiName() {
+      return nameBytes;
     }
 
     @Override
@@ -532,9 +528,11 @@ public abstract class Metadata {
      */
     private BinaryKey(String name, BinaryMarshaller<T> marshaller) {
       super(name);
-      Preconditions.checkArgument(name.endsWith(BINARY_HEADER_SUFFIX),
-          "Binary header is named " + name + ". It must end with " + BINARY_HEADER_SUFFIX);
-      this.marshaller = Preconditions.checkNotNull(marshaller);
+      checkArgument(name.endsWith(BINARY_HEADER_SUFFIX),
+          "Binary header is named %s. It must end with %s",
+          name, BINARY_HEADER_SUFFIX);
+      checkArgument(name.length() > BINARY_HEADER_SUFFIX.length(), "empty key name");
+      this.marshaller = checkNotNull(marshaller, "marshaller is null");
     }
 
     @Override

@@ -33,24 +33,23 @@ package io.grpc.benchmarks;
 
 import static io.grpc.testing.TestUtils.pickUnusedPort;
 
-import com.google.common.util.concurrent.MoreExecutors;
 import com.google.protobuf.ByteString;
 
-import io.grpc.AbstractChannelBuilder;
-import io.grpc.AbstractServerBuilder;
-import io.grpc.ChannelImpl;
-import io.grpc.ServerImpl;
+import io.grpc.ManagedChannel;
+import io.grpc.Server;
 import io.grpc.benchmarks.qps.AsyncServer;
+import io.grpc.inprocess.InProcessChannelBuilder;
+import io.grpc.inprocess.InProcessServerBuilder;
+import io.grpc.internal.AbstractManagedChannelImplBuilder;
+import io.grpc.internal.AbstractServerImplBuilder;
+import io.grpc.netty.NegotiationType;
+import io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.NettyServerBuilder;
+import io.grpc.okhttp.OkHttpChannelBuilder;
 import io.grpc.testing.Payload;
 import io.grpc.testing.SimpleRequest;
 import io.grpc.testing.SimpleResponse;
 import io.grpc.testing.TestServiceGrpc;
-import io.grpc.transport.inprocess.InProcessChannelBuilder;
-import io.grpc.transport.inprocess.InProcessServerBuilder;
-import io.grpc.transport.netty.NegotiationType;
-import io.grpc.transport.netty.NettyChannelBuilder;
-import io.grpc.transport.netty.NettyServerBuilder;
-import io.grpc.transport.okhttp.OkHttpChannelBuilder;
 import io.netty.channel.local.LocalAddress;
 import io.netty.channel.local.LocalChannel;
 import io.netty.channel.local.LocalServerChannel;
@@ -80,14 +79,14 @@ public class TransportBenchmark {
   @Param({"true", "false"})
   public boolean direct;
 
-  private ChannelImpl channel;
-  private ServerImpl server;
+  private ManagedChannel channel;
+  private Server server;
   private TestServiceGrpc.TestServiceBlockingStub stub;
 
   @Setup
   public void setUp() throws Exception {
-    AbstractServerBuilder serverBuilder;
-    AbstractChannelBuilder channelBuilder;
+    AbstractServerImplBuilder serverBuilder;
+    AbstractManagedChannelImplBuilder channelBuilder;
     switch (transport) {
       case INPROCESS:
       {
@@ -120,7 +119,8 @@ public class TransportBenchmark {
         int port = pickUnusedPort();
         InetSocketAddress address = new InetSocketAddress("localhost", port);
         serverBuilder = NettyServerBuilder.forAddress(address);
-        channelBuilder = OkHttpChannelBuilder.forAddress("localhost", port);
+        channelBuilder = OkHttpChannelBuilder.forAddress("localhost", port)
+            .negotiationType(io.grpc.okhttp.NegotiationType.PLAINTEXT);
         break;
       }
       default:
@@ -128,8 +128,9 @@ public class TransportBenchmark {
     }
 
     if (direct) {
-      serverBuilder.executor(MoreExecutors.newDirectExecutorService());
-      channelBuilder.executor(MoreExecutors.newDirectExecutorService());
+      serverBuilder.directExecutor();
+      // Because blocking stubs avoid the executor, this doesn't do much.
+      channelBuilder.directExecutor();
     }
 
     server = serverBuilder
@@ -146,8 +147,8 @@ public class TransportBenchmark {
   public void tearDown() throws Exception {
     channel.shutdown();
     server.shutdown();
-    channel.awaitTerminated(1, TimeUnit.SECONDS);
-    server.awaitTerminated(1, TimeUnit.SECONDS);
+    channel.awaitTermination(1, TimeUnit.SECONDS);
+    server.awaitTermination(1, TimeUnit.SECONDS);
     if (!channel.isTerminated()) {
       throw new Exception("failed to shut down channel");
     }

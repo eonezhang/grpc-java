@@ -31,26 +31,31 @@
 
 package io.grpc.protobuf;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 
 import com.google.common.io.ByteStreams;
+import com.google.protobuf.ByteString;
+import com.google.protobuf.Empty;
 import com.google.protobuf.Enum;
 import com.google.protobuf.Type;
 
-import io.grpc.Marshaller;
+import io.grpc.MethodDescriptor.Marshaller;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.util.Arrays;
 
 /** Unit tests for {@link ProtoUtils}. */
 @RunWith(JUnit4.class)
 public class ProtoUtilsTest {
-  private Marshaller<Type> marshaller = ProtoUtils.marshaller(Type.parser());
+  private Marshaller<Type> marshaller = ProtoUtils.marshaller(Type.getDefaultInstance());
   private Type proto = Type.newBuilder().setName("name").build();
 
   @Test
@@ -67,9 +72,47 @@ public class ProtoUtilsTest {
 
   @Test
   public void testMismatch() throws Exception {
-    Marshaller<Enum> enumMarshaller = ProtoUtils.marshaller(Enum.parser());
+    Marshaller<Enum> enumMarshaller = ProtoUtils.marshaller(Enum.getDefaultInstance());
     // Enum's name and Type's name are both strings with tag 1.
     Enum altProto = Enum.newBuilder().setName(proto.getName()).build();
     assertEquals(proto, marshaller.parse(enumMarshaller.stream(altProto)));
+  }
+
+  @Test
+  public void marshallerShouldNotLimitProtoSize() throws Exception {
+    // The default limit is 64MB. Using a larger proto to verify that the limit is not enforced.
+    byte[] bigName = new byte[70 * 1024 * 1024];
+    Arrays.fill(bigName, (byte) 32);
+
+    proto = Type.newBuilder().setNameBytes(ByteString.copyFrom(bigName)).build();
+
+    // Just perform a round trip to verify that it works.
+    testRoundtrip();
+  }
+
+  @Test
+  public void testAvailable() throws Exception {
+    InputStream is = marshaller.stream(proto);
+    assertEquals(proto.getSerializedSize(), is.available());
+    is.read();
+    assertEquals(proto.getSerializedSize() - 1, is.available());
+    while (is.read() != -1) {}
+    assertEquals(-1, is.read());
+    assertEquals(0, is.available());
+  }
+
+  @Test
+  public void testEmpty() throws IOException {
+    Marshaller<Empty> marshaller = ProtoUtils.marshaller(Empty.getDefaultInstance());
+    InputStream is = marshaller.stream(Empty.getDefaultInstance());
+    assertEquals(0, is.available());
+    byte[] b = new byte[10];
+    assertEquals(-1, is.read(b));
+    assertArrayEquals(new byte[10], b);
+    // Do the same thing again, because the internal state may be different
+    assertEquals(-1, is.read(b));
+    assertArrayEquals(new byte[10], b);
+    assertEquals(-1, is.read());
+    assertEquals(0, is.available());
   }
 }

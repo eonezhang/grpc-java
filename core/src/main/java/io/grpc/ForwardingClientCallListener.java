@@ -42,7 +42,7 @@ public abstract class ForwardingClientCallListener<RespT> extends ClientCall.Lis
   protected abstract ClientCall.Listener<RespT> delegate();
 
   @Override
-  public void onHeaders(Metadata.Headers headers) {
+  public void onHeaders(Metadata headers) {
     delegate().onHeaders(headers);
   }
 
@@ -52,7 +52,7 @@ public abstract class ForwardingClientCallListener<RespT> extends ClientCall.Lis
   }
 
   @Override
-  public void onClose(Status status, Metadata.Trailers trailers) {
+  public void onClose(Status status, Metadata trailers) {
     delegate().onClose(status, trailers);
   }
 

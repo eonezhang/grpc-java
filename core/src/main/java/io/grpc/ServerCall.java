@@ -38,21 +38,21 @@ package io.grpc;
  * requests and responses. This API is generally intended for use by generated handlers,
  * but applications may use it directly if they need to.
  *
- * <p>Headers must be sent before any payloads, which must be sent before closing.
+ * <p>Headers must be sent before any messages, which must be sent before closing.
  *
  * <p>No generic method for determining message receipt or providing acknowledgement is provided.
- * Applications are expected to utilize normal payload messages for such signals, as a response
+ * Applications are expected to utilize normal messages for such signals, as a response
  * naturally acknowledges its request.
  *
  * <p>Methods are guaranteed to be non-blocking. Implementations are not required to be thread-safe.
  *
- * @param <ResponseT> parsed type of response message.
+ * @param <RespT> parsed type of response message.
  */
-public abstract class ServerCall<ResponseT> {
+public abstract class ServerCall<RespT> {
   /**
    * Callbacks for consuming incoming RPC messages.
    *
-   * <p>Any contexts are guaranteed to arrive before any payloads, which are guaranteed before half
+   * <p>Any contexts are guaranteed to arrive before any messages, which are guaranteed before half
    * close, which is guaranteed before completion.
    *
    * <p>Implementations are free to block for extended periods of time. Implementations are not
@@ -61,19 +61,19 @@ public abstract class ServerCall<ResponseT> {
   // TODO(ejona86): We need to decide what to do in the case of server closing with non-cancellation
   // before client half closes. It may be that we treat such a case as an error. If we permit such
   // a case then we either get to generate a half close or purposefully omit it.
-  public abstract static class Listener<RequestT> {
+  public abstract static class Listener<ReqT> {
     /**
      * A request message has been received. For streaming calls, there may be zero or more request
      * messages.
      *
-     * @param payload a received request message.
+     * @param message a received request message.
      */
-    public abstract void onPayload(RequestT payload);
+    public void onMessage(ReqT message) {}
 
     /**
      * The client completed all message sending. However, the call may still be cancelled.
      */
-    public abstract void onHalfClose();
+    public void onHalfClose() {}
 
     /**
      * The call was cancelled and the server is encouraged to abort processing to save resources,
@@ -82,7 +82,7 @@ public abstract class ServerCall<ResponseT> {
      *
      * <p>There will be no further callbacks for the call.
      */
-    public abstract void onCancel();
+    public void onCancel() {}
 
     /**
      * The call is considered complete and {@link #onCancel} is guaranteed not to be called.
@@ -90,11 +90,11 @@ public abstract class ServerCall<ResponseT> {
      *
      * <p>There will be no further callbacks for the call.
      */
-    public abstract void onComplete();
+    public void onComplete() {}
 
     /**
      * This indicates that the call is now capable of sending additional messages (via
-     * {@link #sendPayload}) without requiring excessive buffering internally. This event is
+     * {@link #sendMessage}) without requiring excessive buffering internally. This event is
      * just a suggestion and the application is free to ignore it, however doing so may
      * result in excessive buffering within the call.
      */
@@ -103,34 +103,36 @@ public abstract class ServerCall<ResponseT> {
 
   /**
    * Requests up to the given number of messages from the call to be delivered to
-   * {@link Listener#onPayload(Object)}. Once {@code numMessages} have been delivered
+   * {@link Listener#onMessage(Object)}. Once {@code numMessages} have been delivered
    * no further request messages will be delivered until more messages are requested by
    * calling this method again.
    *
    * <p>Servers use this mechanism to provide back-pressure to the client for flow-control.
+   *
+   * <p>This method is safe to call from multiple threads without external synchronizaton.
    *
    * @param numMessages the requested number of messages to be delivered to the listener.
    */
   public abstract void request(int numMessages);
 
   /**
-   * Send response header metadata prior to sending a response payload. This method may
-   * only be called once and cannot be called after calls to {@link #sendPayload} or {@link #close}.
+   * Send response header metadata prior to sending a response message. This method may
+   * only be called once and cannot be called after calls to {@link #sendMessage} or {@link #close}.
    *
    * @param headers metadata to send prior to any response body.
-   * @throws IllegalStateException if {@code close} has been called, a payload has been sent, or
+   * @throws IllegalStateException if {@code close} has been called, a message has been sent, or
    *     headers have already been sent
    */
-  public abstract void sendHeaders(Metadata.Headers headers);
+  public abstract void sendHeaders(Metadata headers);
 
   /**
-   * Send a response message. Payload messages are the primary form of communication associated with
+   * Send a response message. Messages are the primary form of communication associated with
    * RPCs. Multiple response messages may exist for streaming calls.
    *
-   * @param payload response message.
-   * @throws IllegalStateException if call is {@link #close}d
+   * @param message response message.
+   * @throws IllegalStateException if headers not sent or call is {@link #close}d
    */
-  public abstract void sendPayload(ResponseT payload);
+  public abstract void sendMessage(RespT message);
 
   /**
    * If {@code true}, indicates that the call is capable of sending additional messages
@@ -145,16 +147,16 @@ public abstract class ServerCall<ResponseT> {
   }
 
   /**
-   * Close the call with the provided status. No further sending or receiving will occur. If {@code
-   * status} is not equal to {@link Status#OK}, then the call is said to have failed.
+   * Close the call with the provided status. No further sending or receiving will occur. If {@link
+   * Status#isOk} is {@code false}, then the call is said to have failed.
    *
-   * <p>If {@code status} is not {@link Status#CANCELLED} and no errors or cancellations are known
-   * to have occured, then a {@link Listener#onComplete} notification should be expected.
-   * Otherwise {@link Listener#onCancel} has been or will be called.
+   * <p>If no errors or cancellations are known to have occurred, then a {@link Listener#onComplete}
+   * notification should be expected, independent of {@code status}. Otherwise {@link
+   * Listener#onCancel} has been or will be called.
    *
    * @throws IllegalStateException if call is already {@code close}d
    */
-  public abstract void close(Status status, Metadata.Trailers trailers);
+  public abstract void close(Status status, Metadata trailers);
 
   /**
    * Returns {@code true} when the call is cancelled and the server is encouraged to abort
@@ -165,4 +167,13 @@ public abstract class ServerCall<ResponseT> {
    * <p>This method may safely be called concurrently from multiple threads.
    */
   public abstract boolean isCancelled();
+
+  /**
+   * Enables per-message compression, if an encoding type has been negotiated.  If no message
+   * encoding has been negotiated, this is a no-op.
+   */
+  @ExperimentalApi
+  public void setMessageCompression(boolean enabled) {
+    // noop
+  }
 }

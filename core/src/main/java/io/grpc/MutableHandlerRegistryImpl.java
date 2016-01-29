@@ -44,6 +44,7 @@ import javax.annotation.concurrent.ThreadSafe;
  * blocking method lookup.
  */
 @ThreadSafe
+@ExperimentalApi("https://github.com/grpc/grpc-java/issues/933")
 public final class MutableHandlerRegistryImpl extends MutableHandlerRegistry {
   private final ConcurrentMap<String, ServerServiceDefinition> services
       = new ConcurrentHashMap<String, ServerServiceDefinition>();
@@ -59,9 +60,12 @@ public final class MutableHandlerRegistryImpl extends MutableHandlerRegistry {
     return services.remove(service.getName(), service);
   }
 
+  /**
+   * Note: This does not actually honor the authority provided.  It will, eventually in the future.
+   */
   @Override
   @Nullable
-  public Method lookupMethod(String methodName) {
+  public ServerMethodDefinition<?, ?> lookupMethod(String methodName, @Nullable String authority) {
     String serviceName = MethodDescriptor.extractFullServiceName(methodName);
     if (serviceName == null) {
       return null;
@@ -70,10 +74,6 @@ public final class MutableHandlerRegistryImpl extends MutableHandlerRegistry {
     if (service == null) {
       return null;
     }
-    ServerMethodDefinition<?, ?> method = service.getMethod(methodName);
-    if (method == null) {
-      return null;
-    }
-    return new Method(service, method);
+    return service.getMethod(methodName);
   }
 }

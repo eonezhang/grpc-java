@@ -31,7 +31,9 @@
 
 package io.grpc.stub;
 
+import io.grpc.ExperimentalApi;
 import io.grpc.Metadata;
+import io.grpc.MethodDescriptor;
 import io.grpc.ServerCall;
 import io.grpc.ServerCallHandler;
 import io.grpc.Status;
@@ -40,6 +42,7 @@ import io.grpc.Status;
  * Utility functions for adapting {@link ServerCallHandler}s to application service implementation,
  * meant to be used by the generated code.
  */
+@ExperimentalApi
 public class ServerCalls {
 
   private ServerCalls() {
@@ -76,12 +79,12 @@ public class ServerCalls {
   }
 
   /**
-   * Creates a {@code ServerCallHandler} for a duplex streaming method of the service.
+   * Creates a {@code ServerCallHandler} for a bidi streaming method of the service.
    *
    * @param method an adaptor to the actual method on the service implementation.
    */
-  public static <ReqT, RespT> ServerCallHandler<ReqT, RespT> asyncDuplexStreamingCall(
-      final DuplexStreamingMethod<ReqT, RespT> method) {
+  public static <ReqT, RespT> ServerCallHandler<ReqT, RespT> asyncBidiStreamingCall(
+      final BidiStreamingMethod<ReqT, RespT> method) {
     return asyncStreamingRequestCall(method);
   }
 
@@ -108,7 +111,7 @@ public class ServerCalls {
   /**
    * Adaptor to a bi-directional streaming method.
    */
-  public static interface DuplexStreamingMethod<ReqT, RespT>
+  public static interface BidiStreamingMethod<ReqT, RespT>
       extends StreamingRequestMethod<ReqT, RespT> {
   }
 
@@ -122,25 +125,20 @@ public class ServerCalls {
     return new ServerCallHandler<ReqT, RespT>() {
       @Override
       public ServerCall.Listener<ReqT> startCall(
-          String fullMethodName, final ServerCall<RespT> call, Metadata.Headers headers) {
+          MethodDescriptor<ReqT, RespT> methodDescriptor,
+          final ServerCall<RespT> call,
+          Metadata headers) {
         final ResponseObserver<RespT> responseObserver = new ResponseObserver<RespT>(call);
         // We expect only 1 request, but we ask for 2 requests here so that if a misbehaving client
-        // sends more than 1 requests, we will catch it in onPayload() and emit INVALID_ARGUMENT.
+        // sends more than 1 requests, ServerCall will catch it.
         call.request(2);
         return new EmptyServerCallListener<ReqT>() {
           ReqT request;
           @Override
-          public void onPayload(ReqT request) {
-            if (this.request == null) {
-              // We delay calling method.invoke() until onHalfClose(), because application may call
-              // close(OK) inside invoke(), while close(OK) is not allowed before onHalfClose().
-              this.request = request;
-            } else {
-              call.close(
-                  Status.INVALID_ARGUMENT.withDescription(
-                      "More than one request payloads for unary call or server streaming call"),
-                  new Metadata.Trailers());
-            }
+          public void onMessage(ReqT request) {
+            // We delay calling method.invoke() until onHalfClose() to make sure the client
+            // half-closes.
+            this.request = request;
           }
 
           @Override
@@ -149,7 +147,7 @@ public class ServerCalls {
               method.invoke(request, responseObserver);
             } else {
               call.close(Status.INVALID_ARGUMENT.withDescription("Half-closed without a request"),
-                  new Metadata.Trailers());
+                  new Metadata());
             }
           }
 
@@ -171,8 +169,10 @@ public class ServerCalls {
       final StreamingRequestMethod<ReqT, RespT> method) {
     return new ServerCallHandler<ReqT, RespT>() {
       @Override
-      public ServerCall.Listener<ReqT> startCall(String fullMethodName,
-          final ServerCall<RespT> call, Metadata.Headers headers) {
+      public ServerCall.Listener<ReqT> startCall(
+          MethodDescriptor<ReqT, RespT> methodDescriptor,
+          final ServerCall<RespT> call,
+          Metadata headers) {
         call.request(1);
         final ResponseObserver<RespT> responseObserver = new ResponseObserver<RespT>(call);
         final StreamObserver<ReqT> requestObserver = method.invoke(responseObserver);
@@ -180,8 +180,8 @@ public class ServerCalls {
           boolean halfClosed = false;
 
           @Override
-          public void onPayload(ReqT request) {
-            requestObserver.onValue(request);
+          public void onMessage(ReqT request) {
+            requestObserver.onNext(request);
 
             // Request delivery of the next inbound message.
             call.request(1);
@@ -195,10 +195,10 @@ public class ServerCalls {
 
           @Override
           public void onCancel() {
+            responseObserver.cancelled = true;
             if (!halfClosed) {
               requestObserver.onError(Status.CANCELLED.asException());
             }
-            responseObserver.cancelled = true;
           }
         };
       }
@@ -216,25 +216,27 @@ public class ServerCalls {
   private static class ResponseObserver<RespT> implements StreamObserver<RespT> {
     final ServerCall<RespT> call;
     volatile boolean cancelled;
+    private boolean sentHeaders;
 
     ResponseObserver(ServerCall<RespT> call) {
       this.call = call;
     }
 
     @Override
-    public void onValue(RespT response) {
+    public void onNext(RespT response) {
       if (cancelled) {
         throw Status.CANCELLED.asRuntimeException();
       }
-      call.sendPayload(response);
-
-      // Request delivery of the next inbound message.
-      call.request(1);
+      if (!sentHeaders) {
+        call.sendHeaders(new Metadata());
+        sentHeaders = true;
+      }
+      call.sendMessage(response);
     }
 
     @Override
     public void onError(Throwable t) {
-      call.close(Status.fromThrowable(t), new Metadata.Trailers());
+      call.close(Status.fromThrowable(t), new Metadata());
     }
 
     @Override
@@ -242,14 +244,14 @@ public class ServerCalls {
       if (cancelled) {
         throw Status.CANCELLED.asRuntimeException();
       } else {
-        call.close(Status.OK, new Metadata.Trailers());
+        call.close(Status.OK, new Metadata());
       }
     }
   }
 
   private static class EmptyServerCallListener<ReqT> extends ServerCall.Listener<ReqT> {
     @Override
-    public void onPayload(ReqT request) {
+    public void onMessage(ReqT request) {
     }
 
     @Override

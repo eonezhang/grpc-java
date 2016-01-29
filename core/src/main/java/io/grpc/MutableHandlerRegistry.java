@@ -35,10 +35,13 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 /**
- * Mutable implementation of {@link HandlerRegistry}. Used by server implementations
+ * Mutable base class of {@link HandlerRegistry}. Used by server implementations
  * that need to bind and unbind services that are exposed to remote clients.
+ *
+ * @see MutableHandlerRegistryImpl
  */
 @ThreadSafe
+@ExperimentalApi("https://github.com/grpc/grpc-java/issues/933")
 public abstract class MutableHandlerRegistry extends HandlerRegistry {
   /**
    * Returns {@code null}, or previous service if {@code service} replaced an existing service.
@@ -49,6 +52,5 @@ public abstract class MutableHandlerRegistry extends HandlerRegistry {
   /**
    * Returns {@code false} if {@code service} was not registered.
    */
-  @Nullable
   public abstract boolean removeService(ServerServiceDefinition service);
 }

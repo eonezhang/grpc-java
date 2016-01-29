@@ -31,9 +31,9 @@
 
 package io.grpc.examples.helloworld;
 
-import io.grpc.ChannelImpl;
-import io.grpc.transport.netty.NegotiationType;
-import io.grpc.transport.netty.NettyChannelBuilder;
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
+import io.grpc.StatusRuntimeException;
 
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
@@ -45,32 +45,33 @@ import java.util.logging.Logger;
 public class HelloWorldClient {
   private static final Logger logger = Logger.getLogger(HelloWorldClient.class.getName());
 
-  private final ChannelImpl channel;
+  private final ManagedChannel channel;
   private final GreeterGrpc.GreeterBlockingStub blockingStub;
 
   /** Construct client connecting to HelloWorld server at {@code host:port}. */
   public HelloWorldClient(String host, int port) {
-    channel =
-        NettyChannelBuilder.forAddress(host, port).negotiationType(NegotiationType.PLAINTEXT)
-            .build();
+    channel = ManagedChannelBuilder.forAddress(host, port)
+        .usePlaintext(true)
+        .build();
     blockingStub = GreeterGrpc.newBlockingStub(channel);
   }
 
   public void shutdown() throws InterruptedException {
-    channel.shutdown().awaitTerminated(5, TimeUnit.SECONDS);
+    channel.shutdown().awaitTermination(5, TimeUnit.SECONDS);
   }
 
   /** Say hello to server. */
   public void greet(String name) {
+    logger.info("Will try to greet " + name + " ...");
+    HelloRequest request = HelloRequest.newBuilder().setName(name).build();
+    HelloResponse response;
     try {
-      logger.info("Will try to greet " + name + " ...");
-      HelloRequest request = HelloRequest.newBuilder().setName(name).build();
-      HelloResponse response = blockingStub.sayHello(request);
-      logger.info("Greeting: " + response.getMessage());
-    } catch (RuntimeException e) {
-      logger.log(Level.WARNING, "RPC failed", e);
+      response = blockingStub.sayHello(request);
+    } catch (StatusRuntimeException e) {
+      logger.log(Level.WARNING, "RPC failed: {0}", e.getStatus());
       return;
     }
+    logger.info("Greeting: " + response.getMessage());
   }
 
   /**

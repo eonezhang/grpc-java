@@ -3,33 +3,42 @@ package io.grpc.testing;
 import static io.grpc.stub.ClientCalls.asyncUnaryCall;
 import static io.grpc.stub.ClientCalls.asyncServerStreamingCall;
 import static io.grpc.stub.ClientCalls.asyncClientStreamingCall;
-import static io.grpc.stub.ClientCalls.asyncDuplexStreamingCall;
+import static io.grpc.stub.ClientCalls.asyncBidiStreamingCall;
 import static io.grpc.stub.ClientCalls.blockingUnaryCall;
 import static io.grpc.stub.ClientCalls.blockingServerStreamingCall;
 import static io.grpc.stub.ClientCalls.futureUnaryCall;
+import static io.grpc.MethodDescriptor.generateFullMethodName;
 import static io.grpc.stub.ServerCalls.asyncUnaryCall;
 import static io.grpc.stub.ServerCalls.asyncServerStreamingCall;
 import static io.grpc.stub.ServerCalls.asyncClientStreamingCall;
-import static io.grpc.stub.ServerCalls.asyncDuplexStreamingCall;
+import static io.grpc.stub.ServerCalls.asyncBidiStreamingCall;
 
 @javax.annotation.Generated("by gRPC proto compiler")
 public class TestServiceGrpc {
 
+  private TestServiceGrpc() {}
+
+  public static final String SERVICE_NAME = "grpc.testing.TestService";
+
   // Static method descriptors that strictly reflect the proto.
+  @io.grpc.ExperimentalApi
   public static final io.grpc.MethodDescriptor<io.grpc.testing.SimpleRequest,
       io.grpc.testing.SimpleResponse> METHOD_UNARY_CALL =
       io.grpc.MethodDescriptor.create(
           io.grpc.MethodDescriptor.MethodType.UNARY,
-          "grpc.testing.TestService", "UnaryCall",
-          io.grpc.protobuf.ProtoUtils.marshaller(io.grpc.testing.SimpleRequest.parser()),
-          io.grpc.protobuf.ProtoUtils.marshaller(io.grpc.testing.SimpleResponse.parser()));
+          generateFullMethodName(
+              "grpc.testing.TestService", "UnaryCall"),
+          io.grpc.protobuf.ProtoUtils.marshaller(io.grpc.testing.SimpleRequest.getDefaultInstance()),
+          io.grpc.protobuf.ProtoUtils.marshaller(io.grpc.testing.SimpleResponse.getDefaultInstance()));
+  @io.grpc.ExperimentalApi
   public static final io.grpc.MethodDescriptor<io.grpc.testing.SimpleRequest,
       io.grpc.testing.SimpleResponse> METHOD_STREAMING_CALL =
       io.grpc.MethodDescriptor.create(
-          io.grpc.MethodDescriptor.MethodType.DUPLEX_STREAMING,
-          "grpc.testing.TestService", "StreamingCall",
-          io.grpc.protobuf.ProtoUtils.marshaller(io.grpc.testing.SimpleRequest.parser()),
-          io.grpc.protobuf.ProtoUtils.marshaller(io.grpc.testing.SimpleResponse.parser()));
+          io.grpc.MethodDescriptor.MethodType.BIDI_STREAMING,
+          generateFullMethodName(
+              "grpc.testing.TestService", "StreamingCall"),
+          io.grpc.protobuf.ProtoUtils.marshaller(io.grpc.testing.SimpleRequest.getDefaultInstance()),
+          io.grpc.protobuf.ProtoUtils.marshaller(io.grpc.testing.SimpleResponse.getDefaultInstance()));
 
   public static TestServiceStub newStub(io.grpc.Channel channel) {
     return new TestServiceStub(channel);
@@ -86,14 +95,14 @@ public class TestServiceGrpc {
     public void unaryCall(io.grpc.testing.SimpleRequest request,
         io.grpc.stub.StreamObserver<io.grpc.testing.SimpleResponse> responseObserver) {
       asyncUnaryCall(
-          channel.newCall(METHOD_UNARY_CALL, callOptions), request, responseObserver);
+          getChannel().newCall(METHOD_UNARY_CALL, getCallOptions()), request, responseObserver);
     }
 
     @java.lang.Override
     public io.grpc.stub.StreamObserver<io.grpc.testing.SimpleRequest> streamingCall(
         io.grpc.stub.StreamObserver<io.grpc.testing.SimpleResponse> responseObserver) {
-      return asyncDuplexStreamingCall(
-          channel.newCall(METHOD_STREAMING_CALL, callOptions), responseObserver);
+      return asyncBidiStreamingCall(
+          getChannel().newCall(METHOD_STREAMING_CALL, getCallOptions()), responseObserver);
     }
   }
 
@@ -117,7 +126,7 @@ public class TestServiceGrpc {
     @java.lang.Override
     public io.grpc.testing.SimpleResponse unaryCall(io.grpc.testing.SimpleRequest request) {
       return blockingUnaryCall(
-          channel.newCall(METHOD_UNARY_CALL, callOptions), request);
+          getChannel(), METHOD_UNARY_CALL, getCallOptions(), request);
     }
   }
 
@@ -142,37 +151,68 @@ public class TestServiceGrpc {
     public com.google.common.util.concurrent.ListenableFuture<io.grpc.testing.SimpleResponse> unaryCall(
         io.grpc.testing.SimpleRequest request) {
       return futureUnaryCall(
-          channel.newCall(METHOD_UNARY_CALL, callOptions), request);
+          getChannel().newCall(METHOD_UNARY_CALL, getCallOptions()), request);
+    }
+  }
+
+  private static final int METHODID_UNARY_CALL = 0;
+  private static final int METHODID_STREAMING_CALL = 1;
+
+  private static class MethodHandlers<Req, Resp> implements
+      io.grpc.stub.ServerCalls.UnaryMethod<Req, Resp>,
+      io.grpc.stub.ServerCalls.ServerStreamingMethod<Req, Resp>,
+      io.grpc.stub.ServerCalls.ClientStreamingMethod<Req, Resp>,
+      io.grpc.stub.ServerCalls.BidiStreamingMethod<Req, Resp> {
+    private final TestService serviceImpl;
+    private final int methodId;
+
+    public MethodHandlers(TestService serviceImpl, int methodId) {
+      this.serviceImpl = serviceImpl;
+      this.methodId = methodId;
+    }
+
+    @java.lang.SuppressWarnings("unchecked")
+    public void invoke(Req request, io.grpc.stub.StreamObserver<Resp> responseObserver) {
+      switch (methodId) {
+        case METHODID_UNARY_CALL:
+          serviceImpl.unaryCall((io.grpc.testing.SimpleRequest) request,
+              (io.grpc.stub.StreamObserver<io.grpc.testing.SimpleResponse>) responseObserver);
+          break;
+        default:
+          throw new AssertionError();
+      }
+    }
+
+    @java.lang.SuppressWarnings("unchecked")
+    public io.grpc.stub.StreamObserver<Req> invoke(
+        io.grpc.stub.StreamObserver<Resp> responseObserver) {
+      switch (methodId) {
+        case METHODID_STREAMING_CALL:
+          return (io.grpc.stub.StreamObserver<Req>) serviceImpl.streamingCall(
+              (io.grpc.stub.StreamObserver<io.grpc.testing.SimpleResponse>) responseObserver);
+        default:
+          throw new AssertionError();
+      }
     }
   }
 
   public static io.grpc.ServerServiceDefinition bindService(
       final TestService serviceImpl) {
-    return io.grpc.ServerServiceDefinition.builder("grpc.testing.TestService")
-      .addMethod(io.grpc.ServerMethodDefinition.create(
+    return io.grpc.ServerServiceDefinition.builder(SERVICE_NAME)
+        .addMethod(
           METHOD_UNARY_CALL,
           asyncUnaryCall(
-            new io.grpc.stub.ServerCalls.UnaryMethod<
-                io.grpc.testing.SimpleRequest,
-                io.grpc.testing.SimpleResponse>() {
-              @java.lang.Override
-              public void invoke(
-                  io.grpc.testing.SimpleRequest request,
-                  io.grpc.stub.StreamObserver<io.grpc.testing.SimpleResponse> responseObserver) {
-                serviceImpl.unaryCall(request, responseObserver);
-              }
-            })))
-      .addMethod(io.grpc.ServerMethodDefinition.create(
+            new MethodHandlers<
+              io.grpc.testing.SimpleRequest,
+              io.grpc.testing.SimpleResponse>(
+                serviceImpl, METHODID_UNARY_CALL)))
+        .addMethod(
           METHOD_STREAMING_CALL,
-          asyncDuplexStreamingCall(
-            new io.grpc.stub.ServerCalls.DuplexStreamingMethod<
-                io.grpc.testing.SimpleRequest,
-                io.grpc.testing.SimpleResponse>() {
-              @java.lang.Override
-              public io.grpc.stub.StreamObserver<io.grpc.testing.SimpleRequest> invoke(
-                  io.grpc.stub.StreamObserver<io.grpc.testing.SimpleResponse> responseObserver) {
-                return serviceImpl.streamingCall(responseObserver);
-              }
-            }))).build();
+          asyncBidiStreamingCall(
+            new MethodHandlers<
+              io.grpc.testing.SimpleRequest,
+              io.grpc.testing.SimpleResponse>(
+                serviceImpl, METHODID_STREAMING_CALL)))
+        .build();
   }
 }

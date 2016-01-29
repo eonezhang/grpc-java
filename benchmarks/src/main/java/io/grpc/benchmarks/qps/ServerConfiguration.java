@@ -36,8 +36,8 @@ import static io.grpc.benchmarks.qps.SocketAddressValidator.UDS;
 import static io.grpc.benchmarks.qps.Utils.parseBoolean;
 import static java.lang.Integer.parseInt;
 
+import io.grpc.netty.NettyChannelBuilder;
 import io.grpc.testing.TestUtils;
-import io.grpc.transport.netty.NettyChannelBuilder;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -55,6 +55,7 @@ class ServerConfiguration implements Configuration {
 
   Transport transport = Transport.NETTY_NIO;
   boolean tls;
+  boolean useDefaultCiphers;
   boolean directExecutor;
   SocketAddress address;
   int flowControlWindow = NettyChannelBuilder.DEFAULT_FLOW_CONTROL_WINDOW;
@@ -170,6 +171,13 @@ class ServerConfiguration implements Configuration {
       @Override
       protected void setServerValue(ServerConfiguration config, String value) {
         config.tls = parseBoolean(value);
+      }
+    },
+    USE_DEFAULT_CIPHERS("", "Use the default JDK ciphers for TLS (Used to support Java 7).",
+            "false") {
+      @Override
+      protected void setServerValue(ServerConfiguration config, String value) {
+        config.useDefaultCiphers = parseBoolean(value);
       }
     },
     TRANSPORT("STR", Transport.getDescriptionString(), DEFAULT.transport.name().toLowerCase()) {

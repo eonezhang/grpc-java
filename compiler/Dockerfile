@@ -1,13 +1,14 @@
 FROM protoc-artifacts:latest
 
 RUN scl enable devtoolset-1.1 'bash -c "cd /protobuf && \
-    git checkout v3.0.0-alpha-3.1 && \
+    git fetch && \
+    git checkout v3.0.0-beta-2 && \
     ./autogen.sh && \
-    CXXFLAGS=-m32 ./configure --disable-shared --prefix=/protobuf-32 && \
+    CXXFLAGS=-m32 ./configure --disable-shared --prefix=/protobuf-32 -j$(nproc) && \
     make clean && make && make install"'
 
 RUN scl enable devtoolset-1.1 'bash -c "cd /protobuf && \
-    CXXFLAGS=-m64 ./configure --disable-shared --prefix=/protobuf-64 && \
+    CXXFLAGS=-m64 ./configure --disable-shared --prefix=/protobuf-64 -j$(nproc) && \
     make clean && make && make install"'
 
 ENV CXXFLAGS=-I/protobuf-32/include \

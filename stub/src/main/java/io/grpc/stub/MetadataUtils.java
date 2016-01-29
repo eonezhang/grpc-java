@@ -35,6 +35,7 @@ import io.grpc.CallOptions;
 import io.grpc.Channel;
 import io.grpc.ClientCall;
 import io.grpc.ClientInterceptor;
+import io.grpc.ExperimentalApi;
 import io.grpc.ForwardingClientCall.SimpleForwardingClientCall;
 import io.grpc.ForwardingClientCallListener.SimpleForwardingClientCallListener;
 import io.grpc.Metadata;
@@ -47,6 +48,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * Utility functions for binding and receiving headers.
  */
 public class MetadataUtils {
+  // Prevent instantiation
+  private MetadataUtils() {}
 
   /**
    * Attaches a set of request headers to a stub.
@@ -55,11 +58,11 @@ public class MetadataUtils {
    * @param extraHeaders the headers to be passed by each call on the returned stub.
    * @return an implementation of the stub with {@code extraHeaders} bound to each call.
    */
-  @SuppressWarnings({"unchecked", "rawtypes"})
-  public static <T extends AbstractStub> T attachHeaders(
+  @ExperimentalApi
+  public static <T extends AbstractStub<T>> T attachHeaders(
       T stub,
-      final Metadata.Headers extraHeaders) {
-    return (T) stub.withInterceptors(newAttachHeadersInterceptor(extraHeaders));
+      final Metadata extraHeaders) {
+    return stub.withInterceptors(newAttachHeadersInterceptor(extraHeaders));
   }
 
   /**
@@ -68,7 +71,7 @@ public class MetadataUtils {
    * @param extraHeaders the headers to be passed by each call that is processed by the returned
    *                     interceptor
    */
-  public static ClientInterceptor newAttachHeadersInterceptor(final Metadata.Headers extraHeaders) {
+  public static ClientInterceptor newAttachHeadersInterceptor(final Metadata extraHeaders) {
     return new ClientInterceptor() {
       @Override
       public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
@@ -77,7 +80,7 @@ public class MetadataUtils {
           Channel next) {
         return new SimpleForwardingClientCall<ReqT, RespT>(next.newCall(method, callOptions)) {
           @Override
-          public void start(Listener<RespT> responseListener, Metadata.Headers headers) {
+          public void start(Listener<RespT> responseListener, Metadata headers) {
             headers.merge(extraHeaders);
             super.start(responseListener, headers);
           }
@@ -94,12 +97,12 @@ public class MetadataUtils {
    * @param trailersCapture to record the last received trailers
    * @return an implementation of the stub with {@code extraHeaders} bound to each call.
    */
-  @SuppressWarnings({"unchecked", "rawtypes"})
-  public static <T extends AbstractStub> T captureMetadata(
+  @ExperimentalApi
+  public static <T extends AbstractStub<T>> T captureMetadata(
       T stub,
-      AtomicReference<Metadata.Headers> headersCapture,
-      AtomicReference<Metadata.Trailers> trailersCapture) {
-    return (T) stub.withInterceptors(
+      AtomicReference<Metadata> headersCapture,
+      AtomicReference<Metadata> trailersCapture) {
+    return stub.withInterceptors(
         newCaptureMetadataInterceptor(headersCapture, trailersCapture));
   }
 
@@ -111,8 +114,8 @@ public class MetadataUtils {
    * @return an implementation of the channel with captures installed.
    */
   public static ClientInterceptor newCaptureMetadataInterceptor(
-      final AtomicReference<Metadata.Headers> headersCapture,
-      final AtomicReference<Metadata.Trailers> trailersCapture) {
+      final AtomicReference<Metadata> headersCapture,
+      final AtomicReference<Metadata> trailersCapture) {
     return new ClientInterceptor() {
       @Override
       public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
@@ -121,18 +124,18 @@ public class MetadataUtils {
           Channel next) {
         return new SimpleForwardingClientCall<ReqT, RespT>(next.newCall(method, callOptions)) {
           @Override
-          public void start(Listener<RespT> responseListener, Metadata.Headers headers) {
+          public void start(Listener<RespT> responseListener, Metadata headers) {
             headersCapture.set(null);
             trailersCapture.set(null);
             super.start(new SimpleForwardingClientCallListener<RespT>(responseListener) {
               @Override
-              public void onHeaders(Metadata.Headers headers) {
+              public void onHeaders(Metadata headers) {
                 headersCapture.set(headers);
                 super.onHeaders(headers);
               }
 
               @Override
-              public void onClose(Status status, Metadata.Trailers trailers) {
+              public void onClose(Status status, Metadata trailers) {
                 trailersCapture.set(trailers);
                 super.onClose(status, trailers);
               }

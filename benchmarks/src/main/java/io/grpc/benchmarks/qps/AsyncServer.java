@@ -31,11 +31,12 @@
 
 package io.grpc.benchmarks.qps;
 
-import com.google.common.util.concurrent.MoreExecutors;
 import com.google.protobuf.ByteString;
 
-import io.grpc.ServerImpl;
+import io.grpc.Server;
 import io.grpc.Status;
+import io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import io.grpc.testing.Payload;
 import io.grpc.testing.PayloadType;
@@ -43,14 +44,12 @@ import io.grpc.testing.SimpleRequest;
 import io.grpc.testing.SimpleResponse;
 import io.grpc.testing.TestServiceGrpc;
 import io.grpc.testing.TestUtils;
-import io.grpc.transport.netty.GrpcSslContexts;
-import io.grpc.transport.netty.NettyServerBuilder;
-
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.ServerChannel;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 
 import java.io.File;
@@ -81,7 +80,7 @@ public class AsyncServer {
       return;
     }
 
-    final ServerImpl server = newServer(config);
+    final Server server = newServer(config);
     server.start();
 
     System.out.println("QPS Server started on " + config.address);
@@ -92,7 +91,7 @@ public class AsyncServer {
         try {
           System.out.println("QPS Server shutting down");
           server.shutdown();
-          server.awaitTerminated(5, TimeUnit.SECONDS);
+          server.awaitTermination(5, TimeUnit.SECONDS);
         } catch (Exception e) {
           e.printStackTrace();
         }
@@ -100,7 +99,7 @@ public class AsyncServer {
     });
   }
 
-  static ServerImpl newServer(ServerConfiguration config) throws IOException {
+  static Server newServer(ServerConfiguration config) throws IOException {
     SslContext sslContext = null;
     if (config.tls) {
       System.out.println("Using fake CA for TLS certificate.\n"
@@ -108,10 +107,17 @@ public class AsyncServer {
 
       File cert = TestUtils.loadCert("server1.pem");
       File key = TestUtils.loadCert("server1.key");
-      boolean useJdkSsl = config.transport == ServerConfiguration.Transport.NETTY_NIO;
-      sslContext = GrpcSslContexts.forServer(cert, key)
-          .sslProvider(useJdkSsl ? SslProvider.JDK : SslProvider.OPENSSL)
-          .build();
+      SslContextBuilder sslContextBuilder = GrpcSslContexts.forServer(cert, key);
+      if (config.transport == ServerConfiguration.Transport.NETTY_NIO) {
+        sslContextBuilder = GrpcSslContexts.configure(sslContextBuilder, SslProvider.JDK);
+      } else {
+        // Native transport with OpenSSL
+        sslContextBuilder = GrpcSslContexts.configure(sslContextBuilder, SslProvider.OPENSSL);
+      }
+      if (config.useDefaultCiphers) {
+        sslContextBuilder.ciphers(null);
+      }
+      sslContext = sslContextBuilder.build();
     }
 
     final EventLoopGroup boss;
@@ -160,16 +166,19 @@ public class AsyncServer {
       }
     }
 
-    return NettyServerBuilder
+    NettyServerBuilder builder = NettyServerBuilder
         .forAddress(config.address)
         .bossEventLoopGroup(boss)
         .workerEventLoopGroup(worker)
         .channelType(channelType)
         .addService(TestServiceGrpc.bindService(new TestServiceImpl()))
         .sslContext(sslContext)
-        .executor(config.directExecutor ? MoreExecutors.newDirectExecutorService() : null)
-        .flowControlWindow(config.flowControlWindow)
-        .build();
+        .flowControlWindow(config.flowControlWindow);
+    if (config.directExecutor) {
+      builder.directExecutor();
+    }
+
+    return builder.build();
   }
 
   public static class TestServiceImpl implements TestServiceGrpc.TestService {
@@ -177,7 +186,7 @@ public class AsyncServer {
     @Override
     public void unaryCall(SimpleRequest request, StreamObserver<SimpleResponse> responseObserver) {
       SimpleResponse response = buildSimpleResponse(request);
-      responseObserver.onValue(response);
+      responseObserver.onNext(response);
       responseObserver.onCompleted();
     }
 
@@ -186,9 +195,9 @@ public class AsyncServer {
         final StreamObserver<SimpleResponse> responseObserver) {
       return new StreamObserver<SimpleRequest>() {
         @Override
-        public void onValue(SimpleRequest request) {
+        public void onNext(SimpleRequest request) {
           SimpleResponse response = buildSimpleResponse(request);
-          responseObserver.onValue(response);
+          responseObserver.onNext(response);
         }
 
         @Override

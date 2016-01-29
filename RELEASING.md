@@ -20,6 +20,8 @@ your OSSRH (OSS Repository Hosting) account and signing keys.
 - Follow the instructions on [this
   page](http://central.sonatype.org/pages/ossrh-guide.html) to set up an
   account with OSSRH.
+  - You only need to create the account, not set up a new project
+  - Contact a gRPC maintainer to add your account after you have created it.
 - (For release deployment only) Install GnuPG and [generate your key
   pair](https://www.gnupg.org/documentation/howtos.html). You'll also
   need to [publish your public key](https://www.gnupg.org/gph/en/manual.html#AEN464)
@@ -100,7 +102,7 @@ Setup Build Environment
 The deployment for Linux uses [Docker](https://www.docker.com/) running
 CentOS 6.6 in order to ensure that we have a consistent deployment environment
 on Linux. You'll first need to install Docker if not already installed on your
-system.
+system.  Make sure to have at least version 1.7.1 or later.
 
 1. Under the [Protobuf source directory](https://github.com/google/protobuf), 
    build the `protoc-artifacts` image:
@@ -124,13 +126,15 @@ system.
    made (e.g., copied configuration files) will be lost. If you want to keep the
    container, remove `--rm=true` from the command line.
 4. Next, you'll need to copy your OSSRH credentials and GnuPG keys to your docker container.
-   Run `ifconfig` in the host, find the IP address of the `docker0` interface.
-   Then in Docker:
-   
-   ```bash
-   $ scp -r <your-host-user>@<docker0-IP>:./.gnupg ~/
-   $ mkdir ~/.gradle
-   $ scp -r <your-host-user>@<docker0-IP>:./.gradle/gradle.properties ~/.gradle
+   In Docker:
+   ```
+   # mkdir /root/.gradle
+   ```
+   Find the container ID in your bash prompt, which is shown as `[root@<container-ID> ...]`.
+   In host:
+   ```
+   $ docker cp ~/.gnupg <container-ID>:/root/
+   $ docker cp ~/.gradle/gradle.properties <container-ID>:/root/.gradle/
    ```
    
    You'll also need to update `signing.secretKeyRingFile` in

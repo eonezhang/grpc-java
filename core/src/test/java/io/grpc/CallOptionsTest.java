@@ -33,17 +33,53 @@ package io.grpc;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
+
+import com.google.common.base.Objects;
+import com.google.common.util.concurrent.MoreExecutors;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+
 /** Unit tests for {@link CallOptions}. */
 @RunWith(JUnit4.class)
 public class CallOptionsTest {
+  private String sampleAuthority = "authority";
+  private Long sampleDeadlineNanoTime = 1L;
+  private RequestKey sampleRequestKey = new RequestKey();
+  private CallOptions allSet = CallOptions.DEFAULT
+      .withAuthority(sampleAuthority)
+      .withDeadlineNanoTime(sampleDeadlineNanoTime)
+      .withRequestKey(sampleRequestKey);
+
   @Test
   public void defaultsAreAllNull() {
     assertNull(CallOptions.DEFAULT.getDeadlineNanoTime());
+    assertNull(CallOptions.DEFAULT.getAuthority());
+    assertNull(CallOptions.DEFAULT.getRequestKey());
+    assertNull(CallOptions.DEFAULT.getExecutor());
+  }
+
+  @Test
+  public void allWiths() {
+    assertSame(sampleAuthority, allSet.getAuthority());
+    assertSame(sampleDeadlineNanoTime, allSet.getDeadlineNanoTime());
+    assertSame(sampleRequestKey, allSet.getRequestKey());
+  }
+
+  @Test
+  public void noStrayModifications() {
+    assertTrue(equal(allSet,
+          allSet.withAuthority("blah").withAuthority(sampleAuthority)));
+    assertTrue(equal(allSet,
+          allSet.withDeadlineNanoTime(314L).withDeadlineNanoTime(sampleDeadlineNanoTime)));
+    assertTrue(equal(allSet,
+          allSet.withRequestKey(new RequestKey()).withRequestKey(sampleRequestKey)));
   }
 
   @Test
@@ -54,5 +90,43 @@ public class CallOptionsTest {
     CallOptions options2 = options1.withDeadlineNanoTime(null);
     assertEquals(10L, (long) options1.getDeadlineNanoTime());
     assertNull(options2.getDeadlineNanoTime());
+  }
+
+  @Test
+  public void mutateExecutor() {
+    Executor executor = MoreExecutors.directExecutor();
+    CallOptions options1 = CallOptions.DEFAULT.withExecutor(executor);
+    assertNull(CallOptions.DEFAULT.getExecutor());
+    assertSame(executor, options1.getExecutor());
+    CallOptions options2 = options1.withExecutor(null);
+    assertSame(executor, options1.getExecutor());
+    assertNull(options2.getExecutor());
+  }
+
+  @Test
+  public void testWithDeadlineAfter() {
+    long deadline = CallOptions.DEFAULT
+        .withDeadlineAfter(1, TimeUnit.MINUTES).getDeadlineNanoTime();
+    long expected = System.nanoTime() + 1L * 60 * 1000 * 1000 * 1000;
+    // 10 milliseconds of leeway
+    long epsilon = 1000 * 1000 * 10;
+
+    assertEquals(expected, deadline, epsilon);
+  }
+
+  @Test
+  public void testToString() {
+    assertEquals("CallOptions{deadlineNanoTime=null, authority=null}",
+        CallOptions.DEFAULT.toString());
+    // Deadline makes it hard to check string for equality.
+    assertEquals("CallOptions{deadlineNanoTime=null, authority=authority}",
+        allSet.withDeadlineNanoTime(null).toString());
+    assertTrue(allSet.toString().contains("deadlineNanoTime=" + sampleDeadlineNanoTime + ","));
+  }
+
+  private static boolean equal(CallOptions o1, CallOptions o2) {
+    return Objects.equal(o1.getDeadlineNanoTime(), o2.getDeadlineNanoTime())
+        && Objects.equal(o1.getAuthority(), o2.getAuthority())
+        && Objects.equal(o1.getRequestKey(), o2.getRequestKey());
   }
 }

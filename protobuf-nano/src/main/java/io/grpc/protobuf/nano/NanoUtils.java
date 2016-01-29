@@ -35,7 +35,7 @@ import com.google.common.io.ByteStreams;
 import com.google.protobuf.nano.CodedInputByteBufferNano;
 import com.google.protobuf.nano.MessageNano;
 
-import io.grpc.Marshaller;
+import io.grpc.MethodDescriptor.Marshaller;
 import io.grpc.Status;
 
 import java.io.IOException;
@@ -49,7 +49,8 @@ public class NanoUtils {
   private NanoUtils() {}
 
   /** Adapt {@code parser} to a {@code Marshaller}. */
-  public static <T extends MessageNano> Marshaller<T> marshaller(final Parser<T> parser) {
+  public static <T extends MessageNano> Marshaller<T> marshaller(
+      final MessageNanoFactory<T> factory) {
     return new Marshaller<T>() {
       @Override
       public InputStream stream(T value) {
@@ -62,7 +63,10 @@ public class NanoUtils {
           // TODO(simonma): Investigate whether we can do 0-copy here. 
           CodedInputByteBufferNano input =
               CodedInputByteBufferNano.newInstance(ByteStreams.toByteArray(stream));
-          return parser.parse(input);
+          input.setSizeLimit(Integer.MAX_VALUE);
+          T message = factory.newInstance();
+          message.mergeFrom(input);
+          return message;
         } catch (IOException ipbe) {
           throw Status.INTERNAL.withDescription("Failed parsing nano proto message").withCause(ipbe)
               .asRuntimeException();

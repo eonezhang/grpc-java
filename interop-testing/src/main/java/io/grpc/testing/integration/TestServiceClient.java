@@ -33,12 +33,13 @@ package io.grpc.testing.integration;
 
 import com.google.common.io.Files;
 
-import io.grpc.ChannelImpl;
+import io.grpc.ManagedChannel;
+import io.grpc.internal.GrpcUtil;
+import io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.NegotiationType;
+import io.grpc.netty.NettyChannelBuilder;
+import io.grpc.okhttp.OkHttpChannelBuilder;
 import io.grpc.testing.TestUtils;
-import io.grpc.transport.netty.GrpcSslContexts;
-import io.grpc.transport.netty.NegotiationType;
-import io.grpc.transport.netty.NettyChannelBuilder;
-import io.grpc.transport.okhttp.OkHttpChannelBuilder;
 import io.netty.handler.ssl.SslContext;
 
 import java.io.File;
@@ -158,6 +159,22 @@ public class TestServiceClient {
           + "\n                              Defaults to server host"
           + "\n  --server_port=PORT          Port to connect to. Default " + c.serverPort
           + "\n  --test_case=TESTCASE        Test case to run. Default " + c.testCase
+          + "\n    Valid options:"
+          + "\n      empty_unary: empty (zero bytes) request and response"
+          + "\n      large_unary: single request and (large) response"
+          + "\n      client_streaming: request streaming with single response"
+          + "\n      server_streaming: single request with response streaming"
+          + "\n      ping_pong: full-duplex ping-pong streaming"
+          + "\n      empty_stream: A stream that has zero-messages in both directions"
+          + "\n      service_account_creds: large_unary with service_account auth"
+          + "\n      compute_engine_creds: large_unary with compute engine auth"
+          + "\n      jwt_token_creds: JWT-based auth"
+          + "\n      oauth2_auth_token: raw oauth2 access token auth"
+          + "\n      per_rpc_creds: per rpc raw oauth2 access token auth"
+          + "\n      unimplemented_method: call an unimplemented RPC method"
+          + "\n      cancel_after_begin: cancel stream after starting it"
+          + "\n      cancel_after_first_response: cancel on first response"
+          + "\n      timeout_on_sleeping_server: timeout before receiving a response"
           + "\n  --use_tls=true|false        Whether to use TLS. Default " + c.useTls
           + "\n  --use_test_ca=true|false    Whether to trust our fake CA. Default " + c.useTestCa
           + "\n  --use_okhttp=true|false     Whether to use OkHttp instead of Netty. Default "
@@ -211,16 +228,31 @@ public class TestServiceClient {
       tester.pingPong();
     } else if ("empty_stream".equals(testCase)) {
       tester.emptyStream();
-    } else if ("cancel_after_begin".equals(testCase)) {
-      tester.cancelAfterBegin();
-    } else if ("cancel_after_first_response".equals(testCase)) {
-      tester.cancelAfterFirstResponse();
     } else if ("compute_engine_creds".equals(testCase)) {
       tester.computeEngineCreds(defaultServiceAccount, oauthScope);
     } else if ("service_account_creds".equals(testCase)) {
       String jsonKey = Files.toString(new File(serviceAccountKeyFile), Charset.forName("UTF-8"));
       FileInputStream credentialsStream = new FileInputStream(new File(serviceAccountKeyFile));
       tester.serviceAccountCreds(jsonKey, credentialsStream, oauthScope);
+    } else if ("jwt_token_creds".equals(testCase)) {
+      FileInputStream credentialsStream = new FileInputStream(new File(serviceAccountKeyFile));
+      tester.jwtTokenCreds(credentialsStream);
+    } else if ("oauth2_auth_token".equals(testCase)) {
+      String jsonKey = Files.toString(new File(serviceAccountKeyFile), Charset.forName("UTF-8"));
+      FileInputStream credentialsStream = new FileInputStream(new File(serviceAccountKeyFile));
+      tester.oauth2AuthToken(jsonKey, credentialsStream, oauthScope);
+    } else if ("per_rpc_creds".equals(testCase)) {
+      String jsonKey = Files.toString(new File(serviceAccountKeyFile), Charset.forName("UTF-8"));
+      FileInputStream credentialsStream = new FileInputStream(new File(serviceAccountKeyFile));
+      tester.perRpcCreds(jsonKey, credentialsStream, oauthScope);
+    } else if ("unimplemented_method".equals(testCase)) {
+      tester.unimplementedMethod();
+    } else if ("cancel_after_begin".equals(testCase)) {
+      tester.cancelAfterBegin();
+    } else if ("cancel_after_first_response".equals(testCase)) {
+      tester.cancelAfterFirstResponse();
+    } else  if ("timeout_on_sleeping_server".equals(testCase)) {
+      tester.timeoutOnSleepingServer();
     } else {
       throw new IllegalArgumentException("Unknown test case: " + testCase);
     }
@@ -228,7 +260,7 @@ public class TestServiceClient {
 
   private class Tester extends AbstractTransportTest {
     @Override
-    protected ChannelImpl createChannel() {
+    protected ManagedChannel createChannel() {
       if (!useOkHttp) {
         InetAddress address;
         try {
@@ -258,7 +290,8 @@ public class TestServiceClient {
         OkHttpChannelBuilder builder = OkHttpChannelBuilder.forAddress(serverHost, serverPort);
         if (serverHostOverride != null) {
           // Force the hostname to match the cert the server uses.
-          builder.overrideHostForAuthority(serverHostOverride);
+          builder.overrideAuthority(
+              GrpcUtil.authorityFromHostAndPort(serverHostOverride, serverPort));
         }
         if (useTls) {
           try {

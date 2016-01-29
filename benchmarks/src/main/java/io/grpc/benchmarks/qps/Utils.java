@@ -31,18 +31,18 @@
 
 package io.grpc.benchmarks.qps;
 
-import com.google.common.util.concurrent.MoreExecutors;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.protobuf.ByteString;
 
-import io.grpc.Channel;
+import io.grpc.ManagedChannel;
+import io.grpc.internal.GrpcUtil;
+import io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.NegotiationType;
+import io.grpc.netty.NettyChannelBuilder;
+import io.grpc.okhttp.OkHttpChannelBuilder;
 import io.grpc.testing.Payload;
 import io.grpc.testing.SimpleRequest;
 import io.grpc.testing.TestUtils;
-import io.grpc.transport.netty.GrpcSslContexts;
-import io.grpc.transport.netty.NegotiationType;
-import io.grpc.transport.netty.NettyChannelBuilder;
-import io.grpc.transport.okhttp.OkHttpChannelBuilder;
-
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.EpollDomainSocketChannel;
 import io.netty.channel.epoll.EpollEventLoopGroup;
@@ -51,6 +51,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.channel.unix.DomainSocketAddress;
 import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 
 import org.HdrHistogram.Histogram;
@@ -61,6 +62,7 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.concurrent.ThreadFactory;
 
 import javax.net.ssl.SSLSocketFactory;
 
@@ -128,18 +130,21 @@ final class Utils {
         .build();
   }
 
-  static Channel newClientChannel(ClientConfiguration config) throws IOException {
+  static ManagedChannel newClientChannel(ClientConfiguration config) throws IOException {
     if (config.transport == ClientConfiguration.Transport.OK_HTTP) {
       InetSocketAddress addr = (InetSocketAddress) config.address;
       OkHttpChannelBuilder builder = OkHttpChannelBuilder
-          .forAddress(addr.getHostName(), addr.getPort())
-          .executor(config.directExecutor ? MoreExecutors.newDirectExecutorService() : null);
-      builder.negotiationType(config.tls ? io.grpc.transport.okhttp.NegotiationType.TLS
-          : io.grpc.transport.okhttp.NegotiationType.PLAINTEXT);
+          .forAddress(addr.getHostName(), addr.getPort());
+      if (config.directExecutor) {
+        builder.directExecutor();
+      }
+      builder.negotiationType(config.tls ? io.grpc.okhttp.NegotiationType.TLS
+          : io.grpc.okhttp.NegotiationType.PLAINTEXT);
       if (config.tls) {
         SSLSocketFactory factory;
         if (config.testca) {
-          builder.overrideHostForAuthority(TestUtils.TEST_SERVER_HOST);
+          builder.overrideAuthority(
+              GrpcUtil.authorityFromHostAndPort(TestUtils.TEST_SERVER_HOST, addr.getPort()));
           try {
             factory = TestUtils.newSslSocketFactoryForCa(TestUtils.loadCert("ca.pem"));
           } catch (Exception e) {
@@ -154,32 +159,43 @@ final class Utils {
     }
 
     // It's a Netty transport.
-    SslContext context = null;
+    SslContext sslContext = null;
     NegotiationType negotiationType = config.tls ? NegotiationType.TLS : NegotiationType.PLAINTEXT;
     if (config.tls && config.testca) {
       File cert = TestUtils.loadCert("ca.pem");
-      boolean useJdkSsl = config.transport == ClientConfiguration.Transport.NETTY_NIO;
-      context = GrpcSslContexts.forClient().trustManager(cert)
-          .sslProvider(useJdkSsl ? SslProvider.JDK : SslProvider.OPENSSL)
-          .build();
+      SslContextBuilder sslContextBuilder = GrpcSslContexts.forClient().trustManager(cert);
+      if (config.transport == ClientConfiguration.Transport.NETTY_NIO) {
+        sslContextBuilder = GrpcSslContexts.configure(sslContextBuilder, SslProvider.JDK);
+      } else {
+        // Native transport with OpenSSL
+        sslContextBuilder = GrpcSslContexts.configure(sslContextBuilder, SslProvider.OPENSSL);
+      }
+      if (config.useDefaultCiphers) {
+        sslContextBuilder.ciphers(null);
+      }
+      sslContext = sslContextBuilder.build();
     }
     final EventLoopGroup group;
     final Class<? extends io.netty.channel.Channel> channelType;
+    ThreadFactory tf = new ThreadFactoryBuilder()
+        .setDaemon(true)
+        .setNameFormat("ELG-%d")
+        .build();
     switch (config.transport) {
       case NETTY_NIO:
-        group = new NioEventLoopGroup();
+        group = new NioEventLoopGroup(0, tf);
         channelType = NioSocketChannel.class;
         break;
 
       case NETTY_EPOLL:
         // These classes only work on Linux.
-        group = new EpollEventLoopGroup();
+        group = new EpollEventLoopGroup(0, tf);
         channelType = EpollSocketChannel.class;
         break;
 
       case NETTY_UNIX_DOMAIN_SOCKET:
         // These classes only work on Linux.
-        group = new EpollEventLoopGroup();
+        group = new EpollEventLoopGroup(0, tf);
         channelType = EpollDomainSocketChannel.class;
         break;
 
@@ -187,15 +203,17 @@ final class Utils {
         // Should never get here.
         throw new IllegalArgumentException("Unsupported transport: " + config.transport);
     }
-    return NettyChannelBuilder
+    NettyChannelBuilder builder = NettyChannelBuilder
         .forAddress(config.address)
         .eventLoopGroup(group)
         .channelType(channelType)
         .negotiationType(negotiationType)
-        .executor(config.directExecutor ? MoreExecutors.newDirectExecutorService() : null)
-        .sslContext(context)
-        .flowControlWindow(config.flowControlWindow)
-        .build();
+        .sslContext(sslContext)
+        .flowControlWindow(config.flowControlWindow);
+    if (config.directExecutor) {
+      builder.directExecutor();
+    }
+    return builder.build();
   }
 
   static void saveHistogram(Histogram histogram, String filename) throws IOException {

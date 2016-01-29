@@ -31,6 +31,7 @@
 
 package io.grpc;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Throwables;
@@ -232,7 +233,7 @@ public final class Status {
   }
 
   // Create the canonical list of Status instances indexed by their code values.
-  private static List<Status> STATUS_LIST;
+  private static final List<Status> STATUS_LIST;
 
   static {
     TreeMap<Integer, Status> canonicalizer = new TreeMap<Integer, Status>();
@@ -310,12 +311,14 @@ public final class Status {
   /**
    * Key to bind status code to trailing metadata.
    */
+  @Internal
   public static final Metadata.Key<Status> CODE_KEY
       = Metadata.Key.of("grpc-status", new StatusCodeMarshaller());
 
   /**
    * Key to bind status message to trailing metadata.
    */
+  @Internal
   public static final Metadata.Key<String> MESSAGE_KEY
       = Metadata.Key.of("grpc-message", Metadata.ASCII_STRING_MARSHALLER);
 
@@ -324,17 +327,17 @@ public final class Status {
    */
   public static Status fromThrowable(Throwable t) {
     for (Throwable cause : Throwables.getCausalChain(t)) {
-      if (cause instanceof OperationException) {
-        return ((Status.OperationException) cause).getStatus();
-      } else if (cause instanceof  OperationRuntimeException) {
-        return ((Status.OperationRuntimeException) cause).getStatus();
+      if (cause instanceof StatusException) {
+        return ((StatusException) cause).getStatus();
+      } else if (cause instanceof StatusRuntimeException) {
+        return ((StatusRuntimeException) cause).getStatus();
       }
     }
     // Couldn't find a cause with a Status
     return UNKNOWN.withCause(t);
   }
 
-  private static String formatThrowableMessage(Status status) {
+  static String formatThrowableMessage(Status status) {
     if (status.description == null) {
       return status.code.toString();
     } else {
@@ -421,7 +424,7 @@ public final class Status {
   }
 
   /**
-   * Convert this {@link Status} to a {@link RuntimeException}. Use {@code #fromThrowable}
+   * Convert this {@link Status} to a {@link RuntimeException}. Use {@link #fromThrowable}
    * to recover this {@link Status} instance when the returned exception is in the causal chain.
    */
   public StatusRuntimeException asRuntimeException() {
@@ -429,7 +432,7 @@ public final class Status {
   }
 
   /**
-   * Convert this {@link Status} to an {@link Exception}. Use {@code #fromThrowable}
+   * Convert this {@link Status} to an {@link Exception}. Use {@link #fromThrowable}
    * to recover this {@link Status} instance when the returned exception is in the causal chain.
    */
   public StatusException asException() {
@@ -437,55 +440,13 @@ public final class Status {
   }
 
   /** A string representation of the status useful for debugging. */
-  // We support Guava 14
-  @SuppressWarnings("deprecation")
   @Override
   public String toString() {
-    return Objects.toStringHelper(this)
+    return MoreObjects.toStringHelper(this)
         .add("code", code.name())
         .add("description", description)
         .add("cause", cause)
         .toString();
-  }
-
-  /**
-   * Exception thrown by implementations while managing an operation.
-   *
-   * @deprecated Use {@link StatusException} instead
-   */
-  @Deprecated
-  public static class OperationException extends Exception {
-    private static final long serialVersionUID = -660954903976144640L;
-    private final Status status;
-
-    public OperationException(Status status) {
-      super(formatThrowableMessage(status), status.getCause());
-      this.status = status;
-    }
-
-    public Status getStatus() {
-      return status;
-    }
-  }
-
-  /**
-   * Runtime exception thrown by implementations while managing an operation.
-   *
-   * @deprecated Use {@link StatusRuntimeException} instead
-   */
-  @Deprecated
-  public static class OperationRuntimeException extends RuntimeException {
-    private static final long serialVersionUID = 1950934672280720624L;
-    private final Status status;
-
-    public OperationRuntimeException(Status status) {
-      super(formatThrowableMessage(status), status.getCause());
-      this.status = status;
-    }
-
-    public Status getStatus() {
-      return status;
-    }
   }
 
   private static class StatusCodeMarshaller implements Metadata.AsciiMarshaller<Status> {
@@ -498,5 +459,25 @@ public final class Status {
     public Status parseAsciiString(String serialized) {
       return fromCodeValue(Integer.valueOf(serialized));
     }
+  }
+
+  /**
+   * Equality on Statuses is not well defined.  Instead, do comparison based on their Code with
+   * {@link #getCode}.  The description and cause of the Status are unlikely to be stable, and
+   * additional fields may be added to Status in the future.
+   */
+  @Override
+  public boolean equals(Object obj) {
+    return super.equals(obj);
+  }
+
+  /**
+   * Hash codes on Statuses are not well defined.
+   *
+   * @see #equals
+   */
+  @Override
+  public int hashCode() {
+    return super.hashCode();
   }
 }

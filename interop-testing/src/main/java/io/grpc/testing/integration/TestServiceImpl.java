@@ -35,6 +35,7 @@ import com.google.common.collect.Queues;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.EmptyProtos;
 
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import io.grpc.testing.integration.Messages.PayloadType;
 import io.grpc.testing.integration.Messages.ResponseParameters;
@@ -78,7 +79,7 @@ public class TestServiceImpl implements TestServiceGrpc.TestService {
   @Override
   public void emptyCall(EmptyProtos.Empty empty,
                         StreamObserver<EmptyProtos.Empty> responseObserver) {
-    responseObserver.onValue(EmptyProtos.Empty.getDefaultInstance());
+    responseObserver.onNext(EmptyProtos.Empty.getDefaultInstance());
     responseObserver.onCompleted();
   }
 
@@ -101,7 +102,7 @@ public class TestServiceImpl implements TestServiceGrpc.TestService {
           .setType(compressable ? PayloadType.COMPRESSABLE : PayloadType.UNCOMPRESSABLE)
           .setBody(payload);
     }
-    responseObserver.onValue(responseBuilder.build());
+    responseObserver.onNext(responseBuilder.build());
     responseObserver.onCompleted();
   }
 
@@ -127,13 +128,13 @@ public class TestServiceImpl implements TestServiceGrpc.TestService {
       private int totalPayloadSize;
 
       @Override
-      public void onValue(StreamingInputCallRequest message) {
+      public void onNext(StreamingInputCallRequest message) {
         totalPayloadSize += message.getPayload().getBody().size();
       }
 
       @Override
       public void onCompleted() {
-        responseObserver.onValue(StreamingInputCallResponse.newBuilder()
+        responseObserver.onNext(StreamingInputCallResponse.newBuilder()
             .setAggregatedPayloadSize(totalPayloadSize).build());
         responseObserver.onCompleted();
       }
@@ -155,7 +156,7 @@ public class TestServiceImpl implements TestServiceGrpc.TestService {
     final ResponseDispatcher dispatcher = new ResponseDispatcher(responseObserver);
     return new StreamObserver<StreamingOutputCallRequest>() {
       @Override
-      public void onValue(StreamingOutputCallRequest request) {
+      public void onNext(StreamingOutputCallRequest request) {
         dispatcher.enqueue(toChunkQueue(request));
       }
 
@@ -182,7 +183,7 @@ public class TestServiceImpl implements TestServiceGrpc.TestService {
     final Queue<Chunk> chunks = new LinkedList<Chunk>();
     return new StreamObserver<StreamingOutputCallRequest>() {
       @Override
-      public void onValue(StreamingOutputCallRequest request) {
+      public void onNext(StreamingOutputCallRequest request) {
         chunks.addAll(toChunkQueue(request));
       }
 
@@ -205,10 +206,11 @@ public class TestServiceImpl implements TestServiceGrpc.TestService {
    * available, the stream is half-closed.
    */
   private class ResponseDispatcher {
+    private final Chunk completionChunk = new Chunk(0, 0, 0, false);
     private final Queue<Chunk> chunks;
     private final StreamObserver<StreamingOutputCallResponse> responseStream;
-    private volatile boolean isInputComplete;
     private boolean scheduled;
+    private Throwable failure;
     private Runnable dispatchTask = new Runnable() {
       @Override
       public void run() {
@@ -247,6 +249,7 @@ public class TestServiceImpl implements TestServiceGrpc.TestService {
      * needed.
      */
     public synchronized ResponseDispatcher enqueue(Queue<Chunk> moreChunks) {
+      assertNotFailed();
       chunks.addAll(moreChunks);
       scheduleNextChunk();
       return this;
@@ -257,7 +260,8 @@ public class TestServiceImpl implements TestServiceGrpc.TestService {
      * remain to be scheduled for dispatch to the client.
      */
     public ResponseDispatcher completeInput() {
-      isInputComplete = true;
+      assertNotFailed();
+      chunks.add(completionChunk);
       scheduleNextChunk();
       return this;
     }
@@ -266,15 +270,24 @@ public class TestServiceImpl implements TestServiceGrpc.TestService {
      * Dispatches the current response chunk to the client. This is only called by the executor. At
      * any time, a given dispatch task should only be registered with the executor once.
      */
-    private void dispatchChunk() {
+    private synchronized void dispatchChunk() {
       try {
-
         // Pop off the next chunk and send it to the client.
         Chunk chunk = chunks.remove();
-        responseStream.onValue(chunk.toResponse());
-
+        if (chunk == completionChunk) {
+          responseStream.onCompleted();
+        } else {
+          responseStream.onNext(chunk.toResponse());
+        }
       } catch (Throwable e) {
-        responseStream.onError(e);
+        failure = e;
+        if (Status.fromThrowable(e).getCode() == Status.CANCELLED.getCode()) {
+          // Stream was cancelled by client, responseStream.onError() might be called already or
+          // will be called soon by inbounding StreamObserver.
+          chunks.clear();
+        } else {
+          responseStream.onError(e);
+        }
       }
     }
 
@@ -297,14 +310,12 @@ public class TestServiceImpl implements TestServiceGrpc.TestService {
           return;
         }
       }
+    }
 
-      if (isInputComplete) {
-        // All of the response chunks have been enqueued but there is no chunks left. Close the
-        // stream.
-        responseStream.onCompleted();
+    private void assertNotFailed() {
+      if (failure != null) {
+        throw new IllegalStateException("Stream already failed", failure);
       }
-
-      // Otherwise, the input is not yet complete - wait for more chunks to arrive.
     }
   }
 

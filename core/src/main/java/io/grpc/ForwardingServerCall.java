@@ -46,13 +46,13 @@ public abstract class ForwardingServerCall<RespT> extends ServerCall<RespT> {
   }
 
   @Override
-  public void sendHeaders(Metadata.Headers headers) {
+  public void sendHeaders(Metadata headers) {
     delegate().sendHeaders(headers);
   }
 
   @Override
-  public void sendPayload(RespT payload) {
-    delegate().sendPayload(payload);
+  public void sendMessage(RespT message) {
+    delegate().sendMessage(message);
   }
 
   @Override
@@ -61,13 +61,19 @@ public abstract class ForwardingServerCall<RespT> extends ServerCall<RespT> {
   }
 
   @Override
-  public void close(Status status, Metadata.Trailers trailers) {
+  public void close(Status status, Metadata trailers) {
     delegate().close(status, trailers);
   }
 
   @Override
   public boolean isCancelled() {
     return delegate().isCancelled();
+  }
+
+  @Override
+  @ExperimentalApi
+  public void setMessageCompression(boolean enabled) {
+    delegate().setMessageCompression(enabled);
   }
 
   /**

@@ -33,9 +33,6 @@ package io.grpc;
 
 import com.google.common.base.Preconditions;
 
-import io.grpc.ForwardingServerCall.SimpleForwardingServerCall;
-import io.grpc.ForwardingServerCallListener.SimpleForwardingServerCallListener;
-
 import java.util.Arrays;
 import java.util.List;
 
@@ -70,7 +67,7 @@ public class ServerInterceptors {
    * @return a wrapped version of {@code serviceDef} with the interceptors applied.
    */
   public static ServerServiceDefinition intercept(ServerServiceDefinition serviceDef,
-      List<ServerInterceptor> interceptors) {
+      List<? extends ServerInterceptor> interceptors) {
     Preconditions.checkNotNull(serviceDef);
     if (interceptors.isEmpty()) {
       return serviceDef;
@@ -85,7 +82,7 @@ public class ServerInterceptors {
 
   private static <ReqT, RespT> void wrapAndAddMethod(
       ServerServiceDefinition.Builder serviceDefBuilder, ServerMethodDefinition<ReqT, RespT> method,
-      List<ServerInterceptor> interceptors) {
+      List<? extends ServerInterceptor> interceptors) {
     ServerCallHandler<ReqT, RespT> callHandler = method.getServerCallHandler();
     for (ServerInterceptor interceptor : interceptors) {
       callHandler = InterceptCallHandler.create(interceptor, callHandler);
@@ -109,33 +106,11 @@ public class ServerInterceptors {
     }
 
     @Override
-    public ServerCall.Listener<ReqT> startCall(String method, ServerCall<RespT> call,
-        Metadata.Headers headers) {
+    public ServerCall.Listener<ReqT> startCall(
+        MethodDescriptor<ReqT, RespT> method,
+        ServerCall<RespT> call,
+        Metadata headers) {
       return interceptor.interceptCall(method, call, headers, callHandler);
-    }
-  }
-
-  /**
-   * Utility base class for decorating {@link ServerCall} instances.
-   *
-   * @deprecated Use {@link SimpleForwardingServerCall}
-   */
-  @Deprecated
-  public static class ForwardingServerCall<RespT> extends SimpleForwardingServerCall<RespT> {
-    public ForwardingServerCall(ServerCall<RespT> delegate) {
-      super(delegate);
-    }
-  }
-
-  /**
-   * Utility base class for decorating {@link ServerCall.Listener} instances.
-   *
-   * @deprecated Use {@link SimpleForwardingServerCallListener}
-   */
-  @Deprecated
-  public static class ForwardingListener<ReqT> extends SimpleForwardingServerCallListener<ReqT> {
-    public ForwardingListener(ServerCall.Listener<ReqT> delegate) {
-      super(delegate);
     }
   }
 }

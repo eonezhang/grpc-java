@@ -36,12 +36,20 @@ import static com.google.common.base.Charsets.UTF_8;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import com.google.common.collect.Lists;
 
+import io.grpc.Metadata.Key;
+import io.grpc.internal.GrpcUtil;
+
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
@@ -54,6 +62,8 @@ import java.util.Locale;
  */
 @RunWith(JUnit4.class)
 public class MetadataTest {
+
+  @Rule public final ExpectedException thrown = ExpectedException.none();
 
   private static final Metadata.BinaryMarshaller<Fish> FISH_MARSHALLER =
       new Metadata.BinaryMarshaller<Fish>() {
@@ -76,7 +86,7 @@ public class MetadataTest {
   public void testMutations() {
     Fish lance = new Fish(LANCE);
     Fish cat = new Fish("cat");
-    Metadata.Headers metadata = new Metadata.Headers();
+    Metadata metadata = new Metadata();
 
     assertEquals(null, metadata.get(KEY));
     metadata.put(KEY, lance);
@@ -107,7 +117,7 @@ public class MetadataTest {
   @Test
   public void testWriteParsed() {
     Fish lance = new Fish(LANCE);
-    Metadata.Headers metadata = new Metadata.Headers();
+    Metadata metadata = new Metadata();
     metadata.put(KEY, lance);
     // Should be able to read same instance out
     assertSame(lance, metadata.get(KEY));
@@ -127,7 +137,7 @@ public class MetadataTest {
 
   @Test
   public void testWriteRaw() {
-    Metadata.Headers raw = new Metadata.Headers(KEY.asciiName(), LANCE_BYTES);
+    Metadata raw = new Metadata(KEY.asciiName(), LANCE_BYTES);
     Fish lance = raw.get(KEY);
     assertEquals(lance, new Fish(LANCE));
     // Reading again should return the same parsed instance
@@ -136,7 +146,7 @@ public class MetadataTest {
 
   @Test
   public void testSerializeRaw() {
-    Metadata.Headers raw = new Metadata.Headers(KEY.asciiName(), LANCE_BYTES);
+    Metadata raw = new Metadata(KEY.asciiName(), LANCE_BYTES);
     byte[][] serialized = raw.serialize();
     assertArrayEquals(serialized[0], KEY.asciiName());
     assertArrayEquals(serialized[1], LANCE_BYTES);
@@ -144,8 +154,8 @@ public class MetadataTest {
 
   @Test
   public void testMergeByteConstructed() {
-    Metadata.Headers raw = new Metadata.Headers(KEY.asciiName(), LANCE_BYTES);
-    Metadata.Headers serializable = new Metadata.Headers();
+    Metadata raw = new Metadata(KEY.asciiName(), LANCE_BYTES);
+    Metadata serializable = new Metadata();
     serializable.merge(raw);
 
     byte[][] serialized = serializable.serialize();
@@ -157,11 +167,9 @@ public class MetadataTest {
   @Test
   public void headerMergeShouldCopyValues() {
     Fish lance = new Fish(LANCE);
-    Metadata.Headers h1 = new Metadata.Headers();
+    Metadata h1 = new Metadata();
 
-    Metadata.Headers h2 = new Metadata.Headers();
-    h2.setPath("/some/path");
-    h2.setAuthority("authority");
+    Metadata h2 = new Metadata();
     h2.put(KEY, lance);
 
     h1.merge(h2);
@@ -170,8 +178,6 @@ public class MetadataTest {
     assertTrue(fishes.hasNext());
     assertSame(fishes.next(), lance);
     assertFalse(fishes.hasNext());
-    assertEquals("/some/path", h1.getPath());
-    assertEquals("authority", h1.getAuthority());
   }
 
   @Test
@@ -188,6 +194,21 @@ public class MetadataTest {
     roundTripInteger(0x87654321);
   }
 
+  @Test
+  public void shortBinaryKeyName() {
+    thrown.expect(IllegalArgumentException.class);
+
+    Metadata.Key.of("-bin", FISH_MARSHALLER);
+  }
+
+  @Test
+  public void invalidSuffixBinaryKeyName() {
+    thrown.expect(IllegalArgumentException.class);
+    thrown.expectMessage("Binary header is named");
+
+    Metadata.Key.of("nonbinary", FISH_MARSHALLER);
+  }
+
   private void roundTripInteger(Integer i) {
     assertEquals(i, Metadata.INTEGER_MARSHALLER.parseAsciiString(
         Metadata.INTEGER_MARSHALLER.toAsciiString(i)));
@@ -195,21 +216,18 @@ public class MetadataTest {
 
   @Test
   public void verifyToString() {
-    Metadata.Headers h = new Metadata.Headers();
-    h.setPath("/path");
-    h.setAuthority("myauthority");
+    Metadata h = new Metadata();
     h.put(KEY, new Fish("binary"));
     h.put(Metadata.Key.of("test", Metadata.ASCII_STRING_MARSHALLER), "ascii");
-    assertEquals("Headers(path=/path,authority=myauthority,"
-        + "metadata={test-bin=[Fish(binary)], test=[ascii]})", h.toString());
+    assertEquals("Metadata({test-bin=[Fish(binary)], test=[ascii]})", h.toString());
 
-    Metadata.Trailers t = new Metadata.Trailers();
+    Metadata t = new Metadata();
     t.put(Metadata.Key.of("test", Metadata.ASCII_STRING_MARSHALLER), "ascii");
-    assertEquals("Trailers({test=[ascii]})", t.toString());
+    assertEquals("Metadata({test=[ascii]})", t.toString());
 
-    t = new Metadata.Trailers("test".getBytes(US_ASCII), "ascii".getBytes(US_ASCII),
+    t = new Metadata("test".getBytes(US_ASCII), "ascii".getBytes(US_ASCII),
         "test-bin".getBytes(US_ASCII), "binary".getBytes(US_ASCII));
-    assertEquals("Trailers({test=[ascii], test-bin=[[98, 105, 110, 97, 114, 121]]})", t.toString());
+    assertEquals("Metadata({test=[ascii], test-bin=[[98, 105, 110, 97, 114, 121]]})", t.toString());
   }
 
   @Test
@@ -229,7 +247,7 @@ public class MetadataTest {
       Metadata.Key<String> keyUpperCase
           = Metadata.Key.of("IF-MODIFIED-SINCE", Metadata.ASCII_STRING_MARSHALLER);
 
-      Metadata metadata = new Metadata.Headers();
+      Metadata metadata = new Metadata();
       metadata.put(keyTitleCase, "plain string");
       assertEquals("plain string", metadata.get(keyTitleCase));
       assertEquals("plain string", metadata.get(keyLowerCase));
@@ -241,6 +259,61 @@ public class MetadataTest {
       assertArrayEquals("plain string".getBytes(US_ASCII), bytes[1]);
     } finally {
       Locale.setDefault(originalLocale);
+    }
+  }
+
+  @Test
+  public void removeIgnoresMissingValue() {
+    Metadata m = new Metadata();
+    // Any key will work.
+    Key<String> key = GrpcUtil.USER_AGENT_KEY;
+
+    boolean success = m.remove(key, "agent");
+    assertFalse(success);
+  }
+
+  @Test
+  public void removeAllIgnoresMissingValue() {
+    Metadata m = new Metadata();
+    // Any key will work.
+    Key<String> key = GrpcUtil.USER_AGENT_KEY;
+
+    Iterable<String> removed = m.removeAll(key);
+    assertNull(removed);
+  }
+
+  @Test
+  public void serializeSkipsAuthority() {
+    Metadata m = new Metadata();
+    m.put(GrpcUtil.AUTHORITY_KEY, "authority");
+    byte[][] values = m.serialize();
+
+    assertEquals(0, values.length);
+  }
+
+  @Test
+  public void keyEqualsHashNameWorks() {
+    Key<Integer> k1 = Key.of("case", Metadata.INTEGER_MARSHALLER);
+
+    Key<Integer> k2 = Key.of("CASE", Metadata.INTEGER_MARSHALLER);
+    assertEquals(k1, k1);
+    assertNotEquals(k1, null);
+    assertNotEquals(k1, new Object(){});
+    assertEquals(k1, k2);
+
+    assertEquals(k1.hashCode(), k2.hashCode());
+    // Check that the casing is preserved.
+    assertEquals("CASE", k2.originalName());
+    assertEquals("case", k2.name());
+  }
+
+  @Test
+  public void invalidKeyName() {
+    try {
+      Key.of("io.grpc/key1", Metadata.INTEGER_MARSHALLER);
+      fail("Should have thrown");
+    } catch (IllegalArgumentException e) {
+      assertEquals("Invalid character '/' in key name 'io.grpc/key1'", e.getMessage());
     }
   }
 

@@ -50,7 +50,7 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Benchmark for {@link io.grpc.MutableHandlerRegistryImpl}.
+ * Benchmark for {@link MutableHandlerRegistryImpl}.
  */
 @State(Scope.Benchmark)
 @Fork(1)
@@ -84,7 +84,8 @@ public class HandlerRegistryBenchmark {
       for (int methodIndex = 0; methodIndex < methodCountPerService; ++methodIndex) {
         String methodName = randomString();
         MethodDescriptor<?, ?> methodDescriptor = MethodDescriptor.create(
-            MethodDescriptor.MethodType.UNKNOWN, serviceName, methodName, null, null);
+            MethodDescriptor.MethodType.UNKNOWN,
+            MethodDescriptor.generateFullMethodName(serviceName, methodName), null, null);
         serviceBuilder.addMethod(ServerMethodDefinition.create(methodDescriptor, null));
         fullMethodNames.add(methodDescriptor.getFullMethodName());
       }
@@ -93,7 +94,7 @@ public class HandlerRegistryBenchmark {
   }
 
   /**
-   * Benchmark the {@link io.grpc.HandlerRegistry#lookupMethod(String)} throughput.
+   * Benchmark the {@link MutableHandlerRegistryImpl#lookupMethod(String)} throughput.
    */
   @Benchmark
   public void lookupMethod(Blackhole bh) {

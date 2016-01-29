@@ -69,12 +69,12 @@ public class ClientCallsTest {
     Integer req = 2;
     ListenableFuture<String> future = ClientCalls.futureUnaryCall(call, req);
     ArgumentCaptor<ClientCall.Listener<String>> listenerCaptor = ArgumentCaptor.forClass(null);
-    verify(call).start(listenerCaptor.capture(), any(Metadata.Headers.class));
+    verify(call).start(listenerCaptor.capture(), any(Metadata.class));
     ClientCall.Listener<String> listener = listenerCaptor.getValue();
     verify(call).sendMessage(req);
     verify(call).halfClose();
     listener.onMessage("bar");
-    listener.onClose(Status.OK, new Metadata.Trailers());
+    listener.onClose(Status.OK, new Metadata());
     assertEquals("bar", future.get());
   }
 
@@ -82,9 +82,9 @@ public class ClientCallsTest {
     Integer req = 2;
     ListenableFuture<String> future = ClientCalls.futureUnaryCall(call, req);
     ArgumentCaptor<ClientCall.Listener<String>> listenerCaptor = ArgumentCaptor.forClass(null);
-    verify(call).start(listenerCaptor.capture(), any(Metadata.Headers.class));
+    verify(call).start(listenerCaptor.capture(), any(Metadata.class));
     ClientCall.Listener<String> listener = listenerCaptor.getValue();
-    listener.onClose(Status.INVALID_ARGUMENT, new Metadata.Trailers());
+    listener.onClose(Status.INVALID_ARGUMENT, new Metadata());
     try {
       future.get();
       fail("Should fail");
@@ -98,12 +98,12 @@ public class ClientCallsTest {
     Integer req = 2;
     ListenableFuture<String> future = ClientCalls.futureUnaryCall(call, req);
     ArgumentCaptor<ClientCall.Listener<String>> listenerCaptor = ArgumentCaptor.forClass(null);
-    verify(call).start(listenerCaptor.capture(), any(Metadata.Headers.class));
+    verify(call).start(listenerCaptor.capture(), any(Metadata.class));
     ClientCall.Listener<String> listener = listenerCaptor.getValue();
     future.cancel(true);
     verify(call).cancel();
     listener.onMessage("bar");
-    listener.onClose(Status.OK, new Metadata.Trailers());
+    listener.onClose(Status.OK, new Metadata());
     try {
       future.get();
       fail("Should fail");

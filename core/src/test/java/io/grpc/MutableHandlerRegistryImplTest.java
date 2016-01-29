@@ -40,7 +40,7 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 
-import io.grpc.HandlerRegistry.Method;
+import io.grpc.MethodDescriptor.Marshaller;
 import io.grpc.MethodDescriptor.MethodType;
 
 import org.junit.After;
@@ -61,20 +61,20 @@ public class MutableHandlerRegistryImplTest {
   private ServerCallHandler<String, Integer> handler = mock(ServerCallHandler.class);
   private ServerServiceDefinition basicServiceDefinition = ServerServiceDefinition.builder("basic")
       .addMethod(
-          MethodDescriptor.create(MethodType.UNKNOWN, "basic", "flow",
+          MethodDescriptor.create(MethodType.UNKNOWN, "basic/flow",
               requestMarshaller, responseMarshaller),
           handler).build();
   @SuppressWarnings("rawtypes")
-  private ServerMethodDefinition flowMethodDefinition = 
+  private ServerMethodDefinition flowMethodDefinition =
       getOnlyElement(basicServiceDefinition.getMethods());
   private ServerServiceDefinition multiServiceDefinition = ServerServiceDefinition.builder("multi")
       .addMethod(
-          MethodDescriptor.create(MethodType.UNKNOWN, "multi", "couple",
-            requestMarshaller, responseMarshaller),
+          MethodDescriptor.create(MethodType.UNKNOWN, "multi/couple",
+              requestMarshaller, responseMarshaller),
           handler)
       .addMethod(
-          MethodDescriptor.create(MethodType.UNKNOWN, "multi", "few",
-            requestMarshaller, responseMarshaller),
+          MethodDescriptor.create(MethodType.UNKNOWN, "multi/few",
+              requestMarshaller, responseMarshaller),
           handler).build();
   @SuppressWarnings("rawtypes")
   private ServerMethodDefinition coupleMethodDefinition =
@@ -94,15 +94,8 @@ public class MutableHandlerRegistryImplTest {
   @Test
   public void simpleLookup() {
     assertNull(registry.addService(basicServiceDefinition));
-    Method method = registry.lookupMethod("basic/flow");
-    assertSame(flowMethodDefinition, method.getMethodDefinition());
-    assertSame(basicServiceDefinition, method.getServiceDefinition());
-    method = registry.lookupMethod("basic/flow");
-    assertSame(flowMethodDefinition, method.getMethodDefinition());
-    assertSame(basicServiceDefinition, method.getServiceDefinition());
-    method = registry.lookupMethod("basic/flow");
-    assertSame(flowMethodDefinition, method.getMethodDefinition());
-    assertSame(basicServiceDefinition, method.getServiceDefinition());
+    ServerMethodDefinition<?, ?> method = registry.lookupMethod("basic/flow");
+    assertSame(flowMethodDefinition, method);
 
     assertNull(registry.lookupMethod("/basic/flow"));
     assertNull(registry.lookupMethod("basic/basic"));
@@ -115,15 +108,12 @@ public class MutableHandlerRegistryImplTest {
     assertNull(registry.addService(basicServiceDefinition));
     assertNull(registry.addService(multiServiceDefinition));
 
-    Method method = registry.lookupMethod("basic/flow");
-    assertSame(flowMethodDefinition, method.getMethodDefinition());
-    assertSame(basicServiceDefinition, method.getServiceDefinition());
+    ServerMethodDefinition<?, ?> method = registry.lookupMethod("basic/flow");
+    assertSame(flowMethodDefinition, method);
     method = registry.lookupMethod("multi/couple");
-    assertSame(coupleMethodDefinition, method.getMethodDefinition());
-    assertSame(multiServiceDefinition, method.getServiceDefinition());
+    assertSame(coupleMethodDefinition, method);
     method = registry.lookupMethod("multi/few");
-    assertSame(fewMethodDefinition, method.getMethodDefinition());
-    assertSame(multiServiceDefinition, method.getServiceDefinition());
+    assertSame(fewMethodDefinition, method);
   }
 
   @Test
@@ -141,16 +131,15 @@ public class MutableHandlerRegistryImplTest {
     assertNull(registry.addService(basicServiceDefinition));
     assertNotNull(registry.lookupMethod("basic/flow"));
     ServerServiceDefinition replaceServiceDefinition = ServerServiceDefinition.builder("basic")
-        .addMethod(MethodDescriptor.create(MethodType.UNKNOWN, "basic", "another",
+        .addMethod(MethodDescriptor.create(MethodType.UNKNOWN, "basic/another",
               requestMarshaller, responseMarshaller), handler).build();
     ServerMethodDefinition<?, ?> anotherMethodDefinition =
         replaceServiceDefinition.getMethod("basic/another");
     assertSame(basicServiceDefinition, registry.addService(replaceServiceDefinition));
 
     assertNull(registry.lookupMethod("basic/flow"));
-    Method method = registry.lookupMethod("basic/another");
-    assertSame(anotherMethodDefinition, method.getMethodDefinition());
-    assertSame(replaceServiceDefinition, method.getServiceDefinition());
+    ServerMethodDefinition<?, ?> method = registry.lookupMethod("basic/another");
+    assertSame(anotherMethodDefinition, method);
   }
 
   @Test
@@ -181,6 +170,11 @@ public class MutableHandlerRegistryImplTest {
   public void initialAddReturnsNull() {
     assertNull(registry.addService(basicServiceDefinition));
     assertNull(registry.addService(multiServiceDefinition));
+  }
+
+  @Test
+  public void missingMethodLookupReturnsNull() {
+    assertNull(registry.lookupMethod("bad"));
   }
 
   @Test

@@ -31,13 +31,14 @@
 
 package io.grpc.protobuf;
 
+import com.google.protobuf.CodedInputStream;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.Message;
 import com.google.protobuf.MessageLite;
 import com.google.protobuf.Parser;
 
-import io.grpc.Marshaller;
 import io.grpc.Metadata;
+import io.grpc.MethodDescriptor.Marshaller;
 import io.grpc.Status;
 
 import java.io.InputStream;
@@ -47,8 +48,11 @@ import java.io.InputStream;
  */
 public class ProtoUtils {
 
-  /** Adapt a {@code Parser} to a {@code Marshaller}. */
-  public static <T extends MessageLite> Marshaller<T> marshaller(final Parser<T> parser) {
+  /** Create a {@code Marshaller} for protos of the same type as {@code defaultInstance}. */
+  public static <T extends MessageLite> Marshaller<T> marshaller(final T defaultInstance) {
+    Parser<?> parserGeneric = defaultInstance.getParserForType();
+    @SuppressWarnings("unchecked")
+    final Parser<T> parser = (Parser<T>) parserGeneric;
     return new Marshaller<T>() {
       @Override
       public InputStream stream(T value) {
@@ -73,10 +77,26 @@ public class ProtoUtils {
           }
         }
         try {
-          return parser.parseFrom(stream);
+          return parseFrom(stream);
         } catch (InvalidProtocolBufferException ipbe) {
           throw Status.INTERNAL.withDescription("Invalid protobuf byte sequence")
             .withCause(ipbe).asRuntimeException();
+        }
+      }
+
+      private T parseFrom(InputStream stream) throws InvalidProtocolBufferException {
+        // Pre-create the CodedInputStream so that we can remove the size limit restriction
+        // when parsing.
+        CodedInputStream codedInput = CodedInputStream.newInstance(stream);
+        codedInput.setSizeLimit(Integer.MAX_VALUE);
+
+        T message = parser.parseFrom(codedInput);
+        try {
+          codedInput.checkLastTagWas(0);
+          return message;
+        } catch (InvalidProtocolBufferException e) {
+          e.setUnfinishedMessage(message);
+          throw e;
         }
       }
     };
